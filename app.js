@@ -2657,6 +2657,7 @@ function renderMaking() {
     prefermentPct: Number(d.prefermentPct || 0)
   });
   const flourSpec = flourSpecForDough(d);
+  const flourType = flourTypeForDough(d);
   const ov = getSelectedOven();
   const prog = getSelectedOvenProgram(ov);
   const tempTargets = getProgramTempTargets(prog);
