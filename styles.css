@@ -90,6 +90,40 @@ body{
   margin:12px 0;
 }
 
+.making-sticky{
+  position:sticky;
+  top:64px;
+  z-index:6;
+}
+
+.making-temp-card{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  background:linear-gradient(180deg, rgba(249,115,22,.18), rgba(255,255,255,.05));
+  border-color:rgba(249,115,22,.35);
+}
+
+.making-temp-values{
+  display:flex;
+  flex-wrap:wrap;
+  gap:16px;
+}
+
+.making-temp-item{
+  min-width:160px;
+}
+
+.making-temp-value{
+  font-size:34px;
+  font-weight:800;
+  line-height:1.05;
+}
+
+.making-temp-meta{
+  margin-top:4px;
+}
+
 h2,h3{margin:0 0 10px;}
 p{margin:8px 0; color:var(--muted); line-height:1.35}
 
