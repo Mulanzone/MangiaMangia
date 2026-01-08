@@ -364,6 +364,7 @@ const BASE_OVENS_RAW = [
       bakeEnvironment: "wfo",         // wfo | breville
       mixingMethod: "hand",           // hand | halo
       yeastType: "idy",               // idy | ady | fresh
+      yeastPct: 0.05,
       fermentationLocation: "cold",   // room | cold | hybrid
       fermentationHours: 24,
 
@@ -423,6 +424,9 @@ const BASE_OVENS_RAW = [
   if (!STATE.ovenId && (STATE.ovens?.length)) STATE.ovenId = STATE.ovens[0].id;
 if (!STATE.making) STATE.making = { measured: { roomC:null, flourC:null, waterC:null, doughC:null, counterC:null } };
 if (!STATE.making.measured) STATE.making.measured = { roomC:null, flourC:null, waterC:null, doughC:null, counterC:null };
+if (STATE.dough && (STATE.dough.yeastPct == null || Number.isNaN(Number(STATE.dough.yeastPct)))) {
+  STATE.dough.yeastPct = 0.05;
+}
 
 // ovenProgramId will be corrected after ovens load, but keep it sane:
 if (STATE.ovenProgramId != null && typeof STATE.ovenProgramId !== "string") {
@@ -555,6 +559,12 @@ if (STATE.ovenProgramId != null && typeof STATE.ovenProgramId !== "string") {
     return 1;
   }
 
+  function yeastTypeLabel(yeastType) {
+    if (yeastType === "ady") return "Active Dry";
+    if (yeastType === "fresh") return "Fresh";
+    return "Instant Dry";
+  }
+
   /* ---------- Dough method apply ---------- */
   function getMethod(id) {
     return BASE_DOUGH_METHODS.find((m) => m.id === id) || BASE_DOUGH_METHODS[0];
@@ -577,6 +587,7 @@ function getOvenById(id) {
     STATE.dough.hydrationPct = def.hydrationPct;
     STATE.dough.saltPct = def.saltPct;
     STATE.dough.honeyPct = def.honeyPct;
+    if (def.yeastPct != null) STATE.dough.yeastPct = def.yeastPct;
     STATE.dough.prefermentType = def.prefermentType;
     STATE.dough.prefermentPct = def.prefermentPct;
     STATE.dough.fermentationHours = def.fermentationHours;
@@ -692,11 +703,14 @@ function getProgramTempTargets(prog) {
     const h = Number(d.hydrationPct || 63) / 100;
     const s = Number(d.saltPct || 2.8) / 100;
     const ho = Number(d.honeyPct || 0) / 100;
+    const y = Number(d.yeastPct || 0) / 100;
+    const yeastFactor = y * yeastMultiplier(d.yeastType);
 
-    const flourG = totalDoughG / (1 + h + s + ho);
+    const flourG = totalDoughG / (1 + h + s + ho + yeastFactor);
     const waterG = flourG * h;
     const saltG = flourG * s;
     const honeyG = flourG * ho;
+    const yeastG = flourG * yeastFactor;
 
     const prefPct = clamp(Number(d.prefermentPct || 0), 0, 100) / 100;
     const prefFlourG = flourG * prefPct;
@@ -710,6 +724,7 @@ function getProgramTempTargets(prog) {
       waterG: round(waterG, 0),
       saltG: round(saltG, 1),
       honeyG: round(honeyG, 1),
+      yeastG: round(yeastG, 2),
       prefermentFlourG: round(prefFlourG, 0),
       finalFlourG: round(finalFlourG, 0),
       yeastType: d.yeastType,
@@ -801,6 +816,7 @@ function firstFinite(...vals) {
     setText("totals-water", `${c.waterG} g`);
     setText("totals-salt", `${c.saltG} g`);
     setText("totals-honey", `${c.honeyG} g`);
+    setText("totals-yeast", `${c.yeastG} g`);
     setText("pref-flour", `${c.prefermentFlourG} g`);
     setText("pref-final-flour", `${c.finalFlourG} g`);
     setText("pref-pct", `${Number(d.prefermentPct || 0)}%`);
@@ -1014,6 +1030,13 @@ function firstFinite(...vals) {
               value="${escapeHtml(getInputDisplayValue("honey", Number(d.honeyPct || 0)))}">
             <div class="input-error" data-error-for="honey" hidden></div>
           </div>
+
+          <div>
+            <label>Yeast % (baker's) <span class="dirty-indicator" data-dirty-for="yeastPct" hidden></span></label>
+            <input type="text" id="yeastPct" inputmode="decimal" data-numeric="true"
+              value="${escapeHtml(getInputDisplayValue("yeastPct", Number(d.yeastPct || 0.05)))}">
+            <div class="input-error" data-error-for="yeastPct" hidden></div>
+          </div>
         </div>
       </div>
 
@@ -1053,6 +1076,7 @@ function firstFinite(...vals) {
           <div class="box"><div class="small">Water</div><div class="v" id="totals-water">${c.waterG} g</div></div>
           <div class="box"><div class="small">Salt</div><div class="v" id="totals-salt">${c.saltG} g</div></div>
           <div class="box"><div class="small">Honey</div><div class="v" id="totals-honey">${c.honeyG} g</div></div>
+          <div class="box"><div class="small">Yeast</div><div class="v" id="totals-yeast">${c.yeastG} g</div></div>
         </div>
 
         <div class="card" style="margin-top:12px;">
@@ -1175,6 +1199,14 @@ function firstFinite(...vals) {
       key: "honey",
       getValue: () => Number(d.honeyPct || 0),
       setValue: (value) => { d.honeyPct = clamp(value, 0, 3); },
+      min: 0,
+      max: 3,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#yeastPct"), {
+      key: "yeastPct",
+      getValue: () => Number(d.yeastPct || 0.05),
+      setValue: (value) => { d.yeastPct = clamp(value, 0, 3); },
       min: 0,
       max: 3,
       onCommit: updateSessionOutputs
@@ -1573,6 +1605,7 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
     const toppingTotals = computeToppingTotals();
     const flourType = flourTypeForDough(STATE.dough);
     const flourItems = new Map();
+    const yeastLabel = yeastTypeLabel(STATE.dough?.yeastType);
 
     const addFlourItem = (label, amount) => {
       if (!amount) return;
@@ -1595,6 +1628,7 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
           <li><strong>Water</strong> — ${dough.waterG} g</li>
           <li><strong>Salt</strong> — ${dough.saltG} g</li>
           <li><strong>Honey</strong> — ${dough.honeyG} g</li>
+          <li><strong>Yeast (${escapeHtml(yeastLabel)})</strong> — ${dough.yeastG} g</li>
         </ul>
         <div class="small">Preferment split: ${dough.prefermentFlourG}g (${escapeHtml(flourType.label)}) preferment flour, ${dough.finalFlourG}g (${escapeHtml(flourType.label)}) final-mix flour.</div>
       </div>
@@ -1702,13 +1736,14 @@ function getCanonicalInputsState() {
     ovenId: STATE.ovenId || null,
     ovenProgramId: STATE.ovenProgramId || null,
     mixerId: STATE.mixerId || null,
-    dough: {
-      methodId: d.methodId,
-      plannedEat: d.plannedEat,
-      bakeEnvironment: d.bakeEnvironment,
-      mixingMethod: d.mixingMethod,
-      yeastType: d.yeastType,
-      fermentationLocation: d.fermentationLocation,
+      dough: {
+        methodId: d.methodId,
+        plannedEat: d.plannedEat,
+        bakeEnvironment: d.bakeEnvironment,
+        mixingMethod: d.mixingMethod,
+        yeastType: d.yeastType,
+        yeastPct: d.yeastPct,
+        fermentationLocation: d.fermentationLocation,
       fermentationHours: d.fermentationHours,
       prefermentType: d.prefermentType,
       prefermentPct: d.prefermentPct,
@@ -2256,7 +2291,7 @@ function computeGuideFacts() {
       water: dough.waterG,
       salt: dough.saltG,
       honey: dough.honeyG,
-      yeast: 0
+      yeast: dough.yeastG
     },
     prefermentType: d.prefermentType || "direct",
     prefermentPct: Number(d.prefermentPct || 0)
@@ -2651,7 +2686,7 @@ function renderMaking() {
       water: dough.waterG,
       salt: dough.saltG,
       honey: dough.honeyG,
-      yeast: 0
+      yeast: dough.yeastG
     },
     prefermentType: d.prefermentType || "direct",
     prefermentPct: Number(d.prefermentPct || 0)
@@ -2683,6 +2718,10 @@ function renderMaking() {
     </div>
   `;
 
+  const waterTempDetail = `Target water temp: ${liveWaterRec} °C`;
+  const flourTypeDetail = flourType.label;
+  const yeastDetail = yeastTypeLabel(d.yeastType);
+
   const weighOutTotals = `
     <div class="card">
       <h3>Weigh Out Ingredients (Total Dough)</h3>
@@ -2691,26 +2730,23 @@ function renderMaking() {
         ${ingredientBox("WATER", ingredientBreakdown.totals.water)}
         ${ingredientBox("SALT", ingredientBreakdown.totals.salt)}
         ${ingredientBox("HONEY", ingredientBreakdown.totals.honey)}
-        ${ingredientBox("YEAST", ingredientBreakdown.totals.yeast)}
+        ${ingredientBox("Yeast", ingredientBreakdown.totals.yeast, yeastDetail)}
       </div>
     </div>
   `;
-
-  const waterTempDetail = `Target water temp: ${liveWaterRec} °C`;
-  const flourTypeDetail = flourType.label;
 
   const prefermentStepAItems = [
     ingredientBox("Flour", ingredientBreakdown.preferment.flour, flourTypeDetail),
     ingredientBox("Water", ingredientBreakdown.preferment.water, waterTempDetail),
     ingredientBreakdown.preferment.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.preferment.honey) : "",
-    ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.preferment.yeast) : ""
+    ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("Yeast", ingredientBreakdown.preferment.yeast, yeastDetail) : ""
   ].join("");
 
   const sourdoughCompositionItems = [
     ingredientBreakdown.preferment.flour > 0 ? ingredientBox("Flour", ingredientBreakdown.preferment.flour, flourTypeDetail) : "",
     ingredientBreakdown.preferment.water > 0 ? ingredientBox("Water", ingredientBreakdown.preferment.water, waterTempDetail) : "",
     ingredientBreakdown.preferment.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.preferment.honey) : "",
-    ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.preferment.yeast) : ""
+    ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("Yeast", ingredientBreakdown.preferment.yeast, yeastDetail) : ""
   ].join("");
 
   const prefermentStepA = prefType === "sourdough"
@@ -2744,7 +2780,7 @@ function renderMaking() {
     ingredientBox("Water", ingredientBreakdown.finalMix.water, waterTempDetail),
     ingredientBox("SALT", ingredientBreakdown.finalMix.salt),
     ingredientBreakdown.finalMix.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.finalMix.honey) : "",
-    ingredientBreakdown.finalMix.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.finalMix.yeast) : ""
+    ingredientBreakdown.finalMix.yeast > 0 ? ingredientBox("Yeast", ingredientBreakdown.finalMix.yeast, yeastDetail) : ""
   ].join("");
 
   const prefermentStepB = `
@@ -2768,7 +2804,7 @@ function renderMaking() {
           ${ingredientBox("WATER", ingredientBreakdown.totals.water)}
           ${ingredientBox("SALT", ingredientBreakdown.totals.salt)}
           ${ingredientBox("HONEY", ingredientBreakdown.totals.honey)}
-          ${ingredientBox("YEAST", ingredientBreakdown.totals.yeast)}
+          ${ingredientBox("Yeast", ingredientBreakdown.totals.yeast, yeastDetail)}
         </div>
       </details>
     </div>
