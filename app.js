@@ -2196,6 +2196,16 @@ function getDominantOrderFormat() {
   return entries[0][0];
 }
 
+function formatTempRangeCFromF(range) {
+  if (!Array.isArray(range)) return "—";
+  const min = Number(range[0]);
+  const max = Number(range[1]);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return "—";
+  const toC = (f) => (f - 32) * 5/9;
+  if (!Number.isFinite(max) || min === max) return `${round(toC(min), 0)}°C`;
+  return `${round(toC(min), 0)}–${round(toC(max), 0)}°C`;
+}
+
 function formatOrderFormatLabel(format) {
   const fmt = String(format || "").toLowerCase();
   const map = {
@@ -2237,10 +2247,25 @@ function buildSessionSnapshot() {
   const method = getMethod(d.methodId);
 
   const tempTargets = prog?.temp_targets_f && typeof prog.temp_targets_f === "object"
-    ? prog.temp_targets_f
-    : {};
-  const topTemp = formatTempRangeF(tempTargets.top);
-  const floorTemp = formatTempRangeF(tempTargets.deck || tempTargets.stone);
+    ? Object.entries(prog.temp_targets_f)
+      .filter(([, range]) => Array.isArray(range) && range.length)
+      .map(([key, range]) => {
+        const label = TEMP_TARGET_LABELS[key] || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        const fRange = formatTempRangeF(range);
+        const cRange = formatTempRangeCFromF(range);
+        const combined = (fRange !== "—" && cRange !== "—")
+          ? `${fRange} / ${cRange}`
+          : (fRange !== "—" ? fRange : cRange);
+        return `${label}: ${combined}`;
+      })
+    : [];
+  const ovenTarget = tempTargets.length ? tempTargets.join(" • ") : "";
+  const ovenLabel = ov?.label || "—";
+  const programLabel = prog?.display_name || prog?.id || "";
+  const ovenMode = programLabel ? `${ovenLabel} — ${programLabel}` : ovenLabel;
+  const ovenLine = [ovenTarget, ovenMode && ovenMode !== "—" ? ovenMode : null]
+    .filter(Boolean)
+    .join(" • ") || "—";
 
   const prefLabel = formatPrefermentLabel(d.prefermentType);
   const fermHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
@@ -2280,39 +2305,30 @@ function buildSessionSnapshot() {
   return `
     <div class="card making-temp-card">
       <h3 style="margin:0 0 10px;">Session Snapshot</h3>
-      <div style="display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap:14px;">
+      <div style="display:grid; gap:10px;">
         <div>
           <div class="small">Oven Target</div>
-          <div style="margin-top:8px;">
-            <div class="small">Top</div>
-            <div style="font-size:28px; font-weight:700;">${escapeHtml(topTemp || "—")}</div>
-          </div>
-          <div style="margin-top:10px;">
-            <div class="small">Floor</div>
-            <div style="font-size:28px; font-weight:700;">${escapeHtml(floorTemp || "—")}</div>
-          </div>
+          <div><strong>${escapeHtml(ovenLine || "—")}</strong></div>
         </div>
-        <div style="display:grid; gap:10px;">
-          <div>
-            <div class="small">Dough Method</div>
-            <div><strong>${escapeHtml(methodLabel || "—")}</strong></div>
-            <div class="small">${escapeHtml(methodMeta || "—")}</div>
-          </div>
-          <div>
-            <div class="small">Style</div>
-            <div><strong>${escapeHtml(styleLine || "—")}</strong></div>
-          </div>
-          <div>
-            <div class="small">Fermentation Status</div>
-            <div><strong>${escapeHtml(fermentationStatus || "—")}</strong></div>
-          </div>
-          ${handlingNote ? `
+        <div>
+          <div class="small">Dough Method</div>
+          <div><strong>${escapeHtml(methodLabel || "—")}</strong></div>
+          <div class="small">${escapeHtml(methodMeta || "—")}</div>
+        </div>
+        <div>
+          <div class="small">Style</div>
+          <div><strong>${escapeHtml(styleLine || "—")}</strong></div>
+        </div>
+        <div>
+          <div class="small">Fermentation Status</div>
+          <div><strong>${escapeHtml(fermentationStatus || "—")}</strong></div>
+        </div>
+        ${handlingNote ? `
           <div>
             <div class="small">Handling/Bake Note</div>
             <div><strong>${escapeHtml(handlingNote)}</strong></div>
           </div>
         ` : ""}
-        </div>
       </div>
     </div>
   `;
