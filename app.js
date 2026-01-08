@@ -859,7 +859,7 @@ function firstFinite(...vals) {
       </div>
 
       <div class="card">
-        <h3>Anchor Time</h3>
+        <h3>Eating Time</h3>
         <div class="grid-2">
           <div>
             <label>Planned time to eat</label>
@@ -1571,17 +1571,32 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
     const dough = computeDough();
     const ballsUsed = ensureMinimumBallLogic();
     const toppingTotals = computeToppingTotals();
+    const flourType = flourTypeForDough(STATE.dough);
+    const flourItems = new Map();
+
+    const addFlourItem = (label, amount) => {
+      if (!amount) return;
+      const current = flourItems.get(label) || 0;
+      flourItems.set(label, current + amount);
+    };
+
+    addFlourItem(flourType.label, dough.prefermentFlourG);
+    addFlourItem(flourType.label, dough.finalFlourG);
+
+    const flourList = Array.from(flourItems.entries())
+      .map(([label, amount]) => `<li><strong>Flour (${escapeHtml(label)})</strong> — ${round(amount, 0)} g</li>`)
+      .join("");
 
     root.innerHTML = `
       <div class="card">
         <h3>Dough (for ${ballsUsed} ball(s) × ${STATE.dough.ballWeightG}g)</h3>
         <ul>
-          <li><strong>Flour</strong> — ${dough.flourG} g</li>
+          ${flourList}
           <li><strong>Water</strong> — ${dough.waterG} g</li>
           <li><strong>Salt</strong> — ${dough.saltG} g</li>
           <li><strong>Honey</strong> — ${dough.honeyG} g</li>
         </ul>
-        <div class="small">Preferment split: ${dough.prefermentFlourG}g preferment flour, ${dough.finalFlourG}g final-mix flour.</div>
+        <div class="small">Preferment split: ${dough.prefermentFlourG}g (${escapeHtml(flourType.label)}) preferment flour, ${dough.finalFlourG}g (${escapeHtml(flourType.label)}) final-mix flour.</div>
       </div>
 
       <div class="card">
@@ -2168,6 +2183,19 @@ function flourSpecForDough(d) {
   return { wMin, wMax, proteinMin, notes, specText, shoppingAdvisory };
 }
 
+function flourTypeForDough(d) {
+  const spec = flourSpecForDough(d);
+  const wTarget = Math.round(((spec.wMin + spec.wMax) / 2) / 10) * 10;
+  let descriptor = "moderate";
+  if (wTarget >= 320) descriptor = "strong";
+  else if (wTarget >= 300) descriptor = "medium-strong";
+  return {
+    wTarget,
+    descriptor,
+    label: `W${wTarget} (${descriptor})`
+  };
+}
+
 function buildShoppingAdvisories() {
   const advisories = [];
 
@@ -2646,10 +2674,11 @@ function renderMaking() {
     prefType === "sourdough" ? "Starter" :
     "Preferment";
 
-  const ingredientBox = (label, value) => `
+  const ingredientBox = (label, value, detail) => `
     <div class="box">
       <div class="small">${escapeHtml(label)}</div>
       <div class="v" style="font-size:34px;">${value} g</div>
+      ${detail ? `<div class="small ingredient-note">${escapeHtml(detail)}</div>` : ""}
     </div>
   `;
 
@@ -2666,16 +2695,19 @@ function renderMaking() {
     </div>
   `;
 
+  const waterTempDetail = `Target water temp: ${liveWaterRec} °C`;
+  const flourTypeDetail = flourType.label;
+
   const prefermentStepAItems = [
-    ingredientBox("FLOUR", ingredientBreakdown.preferment.flour),
-    ingredientBox("WATER", ingredientBreakdown.preferment.water),
+    ingredientBox("Flour", ingredientBreakdown.preferment.flour, flourTypeDetail),
+    ingredientBox("Water", ingredientBreakdown.preferment.water, waterTempDetail),
     ingredientBreakdown.preferment.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.preferment.honey) : "",
     ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.preferment.yeast) : ""
   ].join("");
 
   const sourdoughCompositionItems = [
-    ingredientBreakdown.preferment.flour > 0 ? ingredientBox("FLOUR", ingredientBreakdown.preferment.flour) : "",
-    ingredientBreakdown.preferment.water > 0 ? ingredientBox("WATER", ingredientBreakdown.preferment.water) : "",
+    ingredientBreakdown.preferment.flour > 0 ? ingredientBox("Flour", ingredientBreakdown.preferment.flour, flourTypeDetail) : "",
+    ingredientBreakdown.preferment.water > 0 ? ingredientBox("Water", ingredientBreakdown.preferment.water, waterTempDetail) : "",
     ingredientBreakdown.preferment.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.preferment.honey) : "",
     ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.preferment.yeast) : ""
   ].join("");
@@ -2707,8 +2739,8 @@ function renderMaking() {
     `;
 
   const finalMixItems = [
-    ingredientBox("FLOUR", ingredientBreakdown.finalMix.flour),
-    ingredientBox("WATER", ingredientBreakdown.finalMix.water),
+    ingredientBox("Flour", ingredientBreakdown.finalMix.flour, flourTypeDetail),
+    ingredientBox("Water", ingredientBreakdown.finalMix.water, waterTempDetail),
     ingredientBox("SALT", ingredientBreakdown.finalMix.salt),
     ingredientBreakdown.finalMix.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.finalMix.honey) : "",
     ingredientBreakdown.finalMix.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.finalMix.yeast) : ""
@@ -2774,11 +2806,6 @@ function renderMaking() {
           ${prog ? ` • Program: <strong>${programLabel}</strong>` : ""}
         </div>
       </div>
-    </div>
-
-    <div class="card">
-      <h2>Pizzaiolo</h2>
-      <p>Execution console: measure, weigh, and run the timeline.</p>
     </div>
 
 
@@ -2867,6 +2894,57 @@ function renderMaking() {
         ${prog ? ` • Program: <strong>${escapeHtml(prog.display_name || prog.id)}</strong>` : ""}
       </div>
     </div>
+  `;
+
+  root.innerHTML = `
+    <div class="making-sticky">
+      <div class="card making-temp-card">
+        <div class="small">Target cooking temp</div>
+        <div class="making-temp-values">
+          ${tempTargets.length ? tempTargets.map((target) => `
+            <div class="making-temp-item">
+              <div class="small">${escapeHtml(target.label)}</div>
+              <div class="making-temp-value">${escapeHtml(target.value)}</div>
+            </div>
+          `).join("") : `
+            <div class="making-temp-item">
+              <div class="small">Program</div>
+              <div class="making-temp-value">—</div>
+            </div>
+          `}
+        </div>
+        <div class="small making-temp-meta">
+          Oven: <strong>${ovenLabel}</strong>
+          ${prog ? ` • Program: <strong>${programLabel}</strong>` : ""}
+        </div>
+      </div>
+    </div>
+
+    ${measureNowCard}
+    ${ingredientWarnings}
+    ${hasPref ? prefermentStepA + prefermentStepB + totalsReference : weighOutTotals}
+    ${hasPref ? `
+        <div class="card" style="margin-top:12px;">
+          <h3 style="margin:0 0 10px;">Preferment Split (Flour)</h3>
+          <div class="kpi" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+            <div class="box">
+              <div class="small">${escapeHtml(prefType.toUpperCase())} FLOUR</div>
+              <div class="v" style="font-size:28px;">${dough.prefermentFlourG} g</div>
+            </div>
+            <div class="box">
+              <div class="small">FINAL MIX FLOUR</div>
+              <div class="v" style="font-size:28px;">${dough.finalFlourG} g</div>
+            </div>
+            <div class="box">
+              <div class="small">PREFERMENT %</div>
+              <div class="v" style="font-size:28px;">${Number(d.prefermentPct || 0)}%</div>
+            </div>
+          </div>
+          <div class="small" style="margin-top:10px;">
+            Preferment type: <strong>${escapeHtml(prefType)}</strong>
+          </div>
+        </div>
+      ` : ``}
 
     ${cards.map(c => `
       <div class="card">
