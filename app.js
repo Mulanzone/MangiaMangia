@@ -2821,56 +2821,7 @@ function renderMaking() {
     `
     : "";
 
-  root.innerHTML = `
-    <div class="making-sticky">
-      <div class="card making-temp-card">
-        <div class="small">Target cooking temp</div>
-        <div class="making-temp-values">
-          ${tempTargets.length ? tempTargets.map((target) => `
-            <div class="making-temp-item">
-              <div class="small">${escapeHtml(target.label)}</div>
-              <div class="making-temp-value">${escapeHtml(target.value)}</div>
-            </div>
-          `).join("") : `
-            <div class="making-temp-item">
-              <div class="small">Program</div>
-              <div class="making-temp-value">—</div>
-            </div>
-          `}
-        </div>
-        <div class="small making-temp-meta">
-          Oven: <strong>${ovenLabel}</strong>
-          ${prog ? ` • Program: <strong>${programLabel}</strong>` : ""}
-        </div>
-      </div>
-    </div>
-
-
-    ${ingredientWarnings}
-    ${hasPref ? prefermentStepA + prefermentStepB + totalsReference : weighOutTotals}
-    ${hasPref ? `
-        <div class="card" style="margin-top:12px;">
-          <h3 style="margin:0 0 10px;">Preferment Split (Flour)</h3>
-          <div class="kpi" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
-            <div class="box">
-              <div class="small">${escapeHtml(prefType.toUpperCase())} FLOUR</div>
-              <div class="v" style="font-size:28px;">${dough.prefermentFlourG} g</div>
-            </div>
-            <div class="box">
-              <div class="small">FINAL MIX FLOUR</div>
-              <div class="v" style="font-size:28px;">${dough.finalFlourG} g</div>
-            </div>
-            <div class="box">
-              <div class="small">PREFERMENT %</div>
-              <div class="v" style="font-size:28px;">${Number(d.prefermentPct || 0)}%</div>
-            </div>
-          </div>
-          <div class="small" style="margin-top:10px;">
-            Preferment type: <strong>${escapeHtml(prefType)}</strong>
-          </div>
-        </div>
-      ` : ``}
-
+  const measureNowCard = `
     <div class="card">
       <h3>Measure Now (Live Temps)</h3>
 
@@ -2933,6 +2884,33 @@ function renderMaking() {
     </div>
   `;
 
+  const makingSummary = `
+    ${ingredientWarnings}
+    ${hasPref ? prefermentStepA + prefermentStepB + totalsReference : weighOutTotals}
+    ${hasPref ? `
+        <div class="card" style="margin-top:12px;">
+          <h3 style="margin:0 0 10px;">Preferment Split (Flour)</h3>
+          <div class="kpi" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+            <div class="box">
+              <div class="small">${escapeHtml(prefType.toUpperCase())} FLOUR</div>
+              <div class="v" style="font-size:28px;">${dough.prefermentFlourG} g</div>
+            </div>
+            <div class="box">
+              <div class="small">FINAL MIX FLOUR</div>
+              <div class="v" style="font-size:28px;">${dough.finalFlourG} g</div>
+            </div>
+            <div class="box">
+              <div class="small">PREFERMENT %</div>
+              <div class="v" style="font-size:28px;">${Number(d.prefermentPct || 0)}%</div>
+            </div>
+          </div>
+          <div class="small" style="margin-top:10px;">
+            Preferment type: <strong>${escapeHtml(prefType)}</strong>
+          </div>
+        </div>
+      ` : ``}
+  `;
+
   root.innerHTML = `
     <div class="making-sticky">
       <div class="card making-temp-card">
@@ -2958,30 +2936,7 @@ function renderMaking() {
     </div>
 
     ${measureNowCard}
-    ${ingredientWarnings}
-    ${hasPref ? prefermentStepA + prefermentStepB + totalsReference : weighOutTotals}
-    ${hasPref ? `
-        <div class="card" style="margin-top:12px;">
-          <h3 style="margin:0 0 10px;">Preferment Split (Flour)</h3>
-          <div class="kpi" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
-            <div class="box">
-              <div class="small">${escapeHtml(prefType.toUpperCase())} FLOUR</div>
-              <div class="v" style="font-size:28px;">${dough.prefermentFlourG} g</div>
-            </div>
-            <div class="box">
-              <div class="small">FINAL MIX FLOUR</div>
-              <div class="v" style="font-size:28px;">${dough.finalFlourG} g</div>
-            </div>
-            <div class="box">
-              <div class="small">PREFERMENT %</div>
-              <div class="v" style="font-size:28px;">${Number(d.prefermentPct || 0)}%</div>
-            </div>
-          </div>
-          <div class="small" style="margin-top:10px;">
-            Preferment type: <strong>${escapeHtml(prefType)}</strong>
-          </div>
-        </div>
-      ` : ``}
+    ${makingSummary}
 
     ${cards.map(c => `
       <div class="card">
