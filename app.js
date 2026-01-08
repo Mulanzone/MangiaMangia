@@ -2226,22 +2226,25 @@ function computeGuideFacts() {
   const style = getDominantOrderFormat();
   const waterRec = recommendWaterTempC();
 
+  const ingredientBreakdown = PizzaCalc.computeIngredientBreakdown({
+    totals: {
+      flour: dough.flourG,
+      water: dough.waterG,
+      salt: dough.saltG,
+      honey: dough.honeyG,
+      yeast: 0
+    },
+    prefermentType: d.prefermentType || "direct",
+    prefermentPct: Number(d.prefermentPct || 0)
+  });
+
   // Preferment split (flour-based)
-  const prefType = d.prefermentType || "direct";
+  const prefType = ingredientBreakdown.preferment.type;
   const prefPct = clamp(Number(d.prefermentPct || 0), 0, 100) / 100;
-  const prefFlourG = round(dough.flourG * prefPct, 0);
-  const finalFlourG = round(dough.flourG - prefFlourG, 0);
-
-  // Preferment hydration assumptions
-  // Poolish: 100% hydration. Biga: ~55%. Sourdough starter: variable; assume 100% unless you later model starter hydration.
-  const prefermentHydration =
-    prefType === "poolish" ? 1.0 :
-    prefType === "biga" ? 0.55 :
-    prefType === "sourdough" ? 1.0 :
-    0;
-
-  const prefWaterG = round(prefFlourG * prefermentHydration, 0);
-  const finalWaterG = round(dough.waterG - prefWaterG, 0);
+  const prefFlourG = ingredientBreakdown.preferment.flour;
+  const finalFlourG = ingredientBreakdown.finalMix.flour;
+  const prefWaterG = ingredientBreakdown.preferment.water;
+  const finalWaterG = ingredientBreakdown.finalMix.water;
 
   // Oven cues
   const wood = isWoodFiredSelected();
@@ -2263,6 +2266,7 @@ function computeGuideFacts() {
     prefWaterG,
     finalFlourG,
     finalWaterG,
+    ingredientBreakdown,
 
     fermentationHours: clamp(Number(d.fermentationHours || 24), 6, 96),
     fermentationLocation: d.fermentationLocation || "cold",
@@ -2617,6 +2621,17 @@ function renderMaking() {
 
   const d = STATE.dough;
   const dough = computeDough();
+  const ingredientBreakdown = PizzaCalc.computeIngredientBreakdown({
+    totals: {
+      flour: dough.flourG,
+      water: dough.waterG,
+      salt: dough.saltG,
+      honey: dough.honeyG,
+      yeast: 0
+    },
+    prefermentType: d.prefermentType || "direct",
+    prefermentPct: Number(d.prefermentPct || 0)
+  });
   const flourSpec = flourSpecForDough(d);
   const ov = getSelectedOven();
   const prog = getSelectedOvenProgram(ov);
@@ -2627,9 +2642,119 @@ function renderMaking() {
   const measured = STATE.making?.measured || {};
   const liveWaterRec = recommendWaterTempC();
 
-  // Prominent “split” info if preferment
-  const prefType = d.prefermentType;
-  const hasPref = prefType && prefType !== "direct" && dough.prefermentFlourG > 0;
+  const prefType = ingredientBreakdown.preferment.type;
+  const hasPref = prefType && prefType !== "direct" && ingredientBreakdown.preferment.totalMass > 0;
+  const prefermentLabel =
+    prefType === "poolish" ? "Poolish" :
+    prefType === "biga" ? "Biga" :
+    prefType === "sourdough" ? "Starter" :
+    "Preferment";
+
+  const ingredientBox = (label, value) => `
+    <div class="box">
+      <div class="small">${escapeHtml(label)}</div>
+      <div class="v" style="font-size:34px;">${value} g</div>
+    </div>
+  `;
+
+  const weighOutTotals = `
+    <div class="card">
+      <h3>Weigh Out Ingredients (Total Dough)</h3>
+      <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+        ${ingredientBox("FLOUR", ingredientBreakdown.totals.flour)}
+        ${ingredientBox("WATER", ingredientBreakdown.totals.water)}
+        ${ingredientBox("SALT", ingredientBreakdown.totals.salt)}
+        ${ingredientBox("HONEY", ingredientBreakdown.totals.honey)}
+        ${ingredientBox("YEAST", ingredientBreakdown.totals.yeast)}
+      </div>
+    </div>
+  `;
+
+  const prefermentStepAItems = [
+    ingredientBox("FLOUR", ingredientBreakdown.preferment.flour),
+    ingredientBox("WATER", ingredientBreakdown.preferment.water),
+    ingredientBreakdown.preferment.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.preferment.honey) : "",
+    ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.preferment.yeast) : ""
+  ].join("");
+
+  const sourdoughCompositionItems = [
+    ingredientBreakdown.preferment.flour > 0 ? ingredientBox("FLOUR", ingredientBreakdown.preferment.flour) : "",
+    ingredientBreakdown.preferment.water > 0 ? ingredientBox("WATER", ingredientBreakdown.preferment.water) : "",
+    ingredientBreakdown.preferment.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.preferment.honey) : "",
+    ingredientBreakdown.preferment.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.preferment.yeast) : ""
+  ].join("");
+
+  const prefermentStepA = prefType === "sourdough"
+    ? `
+      <div class="card">
+        <h3>Step A — Prepare/Use Starter</h3>
+        <div class="kpi" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+          ${ingredientBox("ACTIVE STARTER TO USE", ingredientBreakdown.preferment.totalMass)}
+        </div>
+        ${sourdoughCompositionItems ? `
+          <div class="small" style="margin-top:10px;">
+            Starter composition (assumes 100% hydration):
+          </div>
+          <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top:10px;">
+            ${sourdoughCompositionItems}
+          </div>
+        ` : ""}
+      </div>
+    `
+    : `
+      <div class="card">
+        <h3>Step A — Make the ${escapeHtml(prefermentLabel)}</h3>
+        <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+          ${prefermentStepAItems}
+        </div>
+      </div>
+    `;
+
+  const finalMixItems = [
+    ingredientBox("FLOUR", ingredientBreakdown.finalMix.flour),
+    ingredientBox("WATER", ingredientBreakdown.finalMix.water),
+    ingredientBox("SALT", ingredientBreakdown.finalMix.salt),
+    ingredientBreakdown.finalMix.honey > 0 ? ingredientBox("HONEY", ingredientBreakdown.finalMix.honey) : "",
+    ingredientBreakdown.finalMix.yeast > 0 ? ingredientBox("YEAST", ingredientBreakdown.finalMix.yeast) : ""
+  ].join("");
+
+  const prefermentStepB = `
+    <div class="card">
+      <h3>Step B — Final Dough Mix</h3>
+      <div class="small" style="margin-bottom:10px;">
+        Add preferment/starter: <strong>${ingredientBreakdown.finalMix.addPrefermentMass} g</strong>
+      </div>
+      <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+        ${finalMixItems}
+      </div>
+    </div>
+  `;
+
+  const totalsReference = `
+    <div class="card">
+      <details>
+        <summary><strong>Totals (reference)</strong></summary>
+        <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top:12px;">
+          ${ingredientBox("FLOUR", ingredientBreakdown.totals.flour)}
+          ${ingredientBox("WATER", ingredientBreakdown.totals.water)}
+          ${ingredientBox("SALT", ingredientBreakdown.totals.salt)}
+          ${ingredientBox("HONEY", ingredientBreakdown.totals.honey)}
+          ${ingredientBox("YEAST", ingredientBreakdown.totals.yeast)}
+        </div>
+      </details>
+    </div>
+  `;
+
+  const ingredientWarnings = ingredientBreakdown.errors.length
+    ? `
+      <div class="card" style="border:1px solid rgba(239,68,68,.6);">
+        <h3>Ingredient split warning</h3>
+        <ul class="small" style="margin:8px 0 0 16px;">
+          ${ingredientBreakdown.errors.map((msg) => `<li>${escapeHtml(msg)}</li>`).join("")}
+        </ul>
+      </div>
+    `
+    : "";
 
   root.innerHTML = `
     <div class="making-sticky">
@@ -2660,51 +2785,8 @@ function renderMaking() {
       <p>Execution console: measure, weigh, and run the timeline.</p>
     </div>
 
-    <div class="card">
-      <h3>Weigh Out Now (Large Numbers)</h3>
-
-      <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
-        <div class="box">
-          <div class="small">FLOUR</div>
-          <div class="v" style="font-size:34px;">${dough.flourG} g</div>
-        </div>
-        <div class="box">
-          <div class="small">WATER</div>
-          <div class="v" style="font-size:34px;">${dough.waterG} g</div>
-        </div>
-        <div class="box">
-          <div class="small">SALT</div>
-          <div class="v" style="font-size:34px;">${dough.saltG} g</div>
-        </div>
-        <div class="box">
-          <div class="small">HONEY</div>
-          <div class="v" style="font-size:34px;">${dough.honeyG} g</div>
-        </div>
-      </div>
-
-      ${hasPref ? `
-        <div class="card" style="margin-top:12px;">
-          <h3 style="margin:0 0 10px;">Preferment Split (Flour)</h3>
-          <div class="kpi" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
-            <div class="box">
-              <div class="small">${escapeHtml(prefType.toUpperCase())} FLOUR</div>
-              <div class="v" style="font-size:28px;">${dough.prefermentFlourG} g</div>
-            </div>
-            <div class="box">
-              <div class="small">FINAL MIX FLOUR</div>
-              <div class="v" style="font-size:28px;">${dough.finalFlourG} g</div>
-            </div>
-            <div class="box">
-              <div class="small">PREFERMENT %</div>
-              <div class="v" style="font-size:28px;">${Number(d.prefermentPct || 0)}%</div>
-            </div>
-          </div>
-          <div class="small" style="margin-top:10px;">
-            Preferment type: <strong>${escapeHtml(prefType)}</strong>
-          </div>
-        </div>
-      ` : ``}
-    </div>
+    ${ingredientWarnings}
+    ${hasPref ? prefermentStepA + prefermentStepB + totalsReference : weighOutTotals}
 
     <div class="card">
       <h3>Measure Now (Live Temps)</h3>
