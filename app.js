@@ -845,11 +845,9 @@ function firstFinite(...vals) {
     const ov = getSelectedOven();
     const prog = getSelectedOvenProgram(ov);
 
-    setBanner("ok", "Session loaded", "Session, Orders, Making, Shopping, Presets are active. If anything blanks, check the DevTools Console for the thrown error.");
-
     root.innerHTML = `
       <div class="card">
-        <h2>Session Dashboard</h2>
+        <h2>Pizza Night Dashboard</h2>
         <p>One dough for everyone. Orders only change how many balls you need (minimum ${MIN_BALLS}).</p>
 
         <div class="kpi">
@@ -1572,11 +1570,6 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
     const toppingTotals = computeToppingTotals();
 
     root.innerHTML = `
-      <div class="card">
-        <h2>Shopping List</h2>
-        <p>Split into Dough vs Toppings. Dough uses max(min ${MIN_BALLS}, ordered).</p>
-      </div>
-
       <div class="card">
         <h3>Dough (for ${ballsUsed} ball(s) × ${STATE.dough.ballWeightG}g)</h3>
         <ul>
@@ -2656,11 +2649,6 @@ function renderMaking() {
     </div>
 
     <div class="card">
-      <h2>Pizza Making</h2>
-      <p>Execution console: measure, weigh, and run the timeline.</p>
-    </div>
-
-    <div class="card">
       <h3>Weigh Out Now (Large Numbers)</h3>
 
       <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
@@ -2911,11 +2899,6 @@ function renderMaking() {
     const custom = loadCustomPizzaPresets();
 
     root.innerHTML = `
-      <div class="card">
-        <h2>Pizza Presets</h2>
-        <p>Base presets are immutable. Create custom presets for your own styles and topping sets.</p>
-      </div>
-
       <div class="card">
         <h3>Create new preset</h3>
         <div class="grid-2">
