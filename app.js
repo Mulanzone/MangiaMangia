@@ -2195,6 +2195,144 @@ function getDominantOrderFormat() {
   entries.sort((a,b)=>b[1]-a[1]);
   return entries[0][0];
 }
+
+function formatTempRangeCFromF(range) {
+  if (!Array.isArray(range)) return "—";
+  const min = Number(range[0]);
+  const max = Number(range[1]);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return "—";
+  const toC = (f) => (f - 32) * 5/9;
+  if (!Number.isFinite(max) || min === max) return `${round(toC(min), 0)}°C`;
+  return `${round(toC(min), 0)}–${round(toC(max), 0)}°C`;
+}
+
+function formatOrderFormatLabel(format) {
+  const fmt = String(format || "").toLowerCase();
+  const map = {
+    neapolitan: "Neapolitan Round",
+    calzone: "Calzone",
+    panzerotti: "Panzerotti",
+    teglia: "Teglia / Pan",
+    focaccia: "Focaccia",
+    dessert: "Dessert",
+    custom: "Custom"
+  };
+  return map[fmt] || fmt.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatFermentationLocationLabel(loc) {
+  const key = String(loc || "").toLowerCase();
+  const map = {
+    cold: "Cold",
+    room: "Room",
+    hybrid: "Hybrid",
+    double: "Double"
+  };
+  return map[key] || "—";
+}
+
+function formatPrefermentLabel(prefType) {
+  const pref = String(prefType || "direct").toLowerCase();
+  if (pref === "poolish") return "Poolish";
+  if (pref === "biga") return "Biga";
+  if (pref === "sourdough") return "Starter";
+  if (pref === "direct") return "Direct";
+  return pref.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function buildSessionSnapshot() {
+  const d = STATE.dough || {};
+  const ov = getSelectedOven();
+  const prog = getSelectedOvenProgram(ov);
+  const method = getMethod(d.methodId);
+
+  const tempTargets = prog?.temp_targets_f && typeof prog.temp_targets_f === "object"
+    ? Object.entries(prog.temp_targets_f)
+      .filter(([, range]) => Array.isArray(range) && range.length)
+      .map(([key, range]) => {
+        const label = TEMP_TARGET_LABELS[key] || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        const fRange = formatTempRangeF(range);
+        const cRange = formatTempRangeCFromF(range);
+        const combined = (fRange !== "—" && cRange !== "—")
+          ? `${fRange} / ${cRange}`
+          : (fRange !== "—" ? fRange : cRange);
+        return `${label}: ${combined}`;
+      })
+    : [];
+  const ovenTarget = tempTargets.length ? tempTargets.join(" • ") : "";
+  const ovenLabel = ov?.label || "—";
+  const programLabel = prog?.display_name || prog?.id || "";
+  const ovenMode = programLabel ? `${ovenLabel} — ${programLabel}` : ovenLabel;
+  const ovenLine = [ovenTarget, ovenMode && ovenMode !== "—" ? ovenMode : null]
+    .filter(Boolean)
+    .join(" • ") || "—";
+
+  const prefLabel = formatPrefermentLabel(d.prefermentType);
+  const fermHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
+  const hoursLabel = Number.isFinite(fermHours) ? `${fermHours}h` : "—";
+  const locationLabel = formatFermentationLocationLabel(d.fermentationLocation);
+  const methodLabel = method?.label || "—";
+  const methodMeta = `${prefLabel} • ${hoursLabel} ${locationLabel}`;
+
+  const format = getDominantOrderFormat();
+  const styleLabel = formatOrderFormatLabel(format);
+  const ballWeight = Number(d.ballWeightG);
+  const ballWeightLabel = Number.isFinite(ballWeight) ? `${Math.round(ballWeight)}g` : "—";
+  const showBallWeight = !["teglia", "focaccia"].includes(String(format || "").toLowerCase());
+  const styleLine = showBallWeight ? `${styleLabel} • ${ballWeightLabel}` : styleLabel;
+
+  const timeline = computeTimelineInputs();
+  const fermLoc = timeline?.fermentationLocation || d.fermentationLocation || "cold";
+  const fermTotal = Number(timeline?.fermentationHours ?? d.fermentationHours);
+  let fermentationStatus = "—";
+  if (fermLoc === "cold") fermentationStatus = "Cold fermented • Ready to bake";
+  else if (fermLoc === "hybrid") fermentationStatus = "Hybrid ferment • Tempering now";
+  else if (fermLoc === "double") fermentationStatus = "Double ferment • Final proof";
+  else if (Number.isFinite(fermTotal) && fermTotal <= 10) fermentationStatus = "Same-day dough • Time-sensitive";
+  else if (fermLoc === "room") fermentationStatus = "Room ferment • Bake same day";
+
+  const honeyPct = Number(d.honeyPct || 0);
+  const hydrationPct = Number(d.hydrationPct || 0);
+  const prefType = String(d.prefermentType || "direct").toLowerCase();
+  const handlingNote = honeyPct > 0
+    ? "Faster browning expected"
+    : hydrationPct >= 70
+      ? "High hydration — flour generously"
+      : (prefType === "poolish" || prefType === "biga")
+        ? "Gentle opening — preserve gas"
+        : "";
+
+  return `
+    <div class="card making-temp-card">
+      <h3 style="margin:0 0 10px;">Session Snapshot</h3>
+      <div style="display:grid; gap:10px;">
+        <div>
+          <div class="small">Oven Target</div>
+          <div><strong>${escapeHtml(ovenLine || "—")}</strong></div>
+        </div>
+        <div>
+          <div class="small">Dough Method</div>
+          <div><strong>${escapeHtml(methodLabel || "—")}</strong></div>
+          <div class="small">${escapeHtml(methodMeta || "—")}</div>
+        </div>
+        <div>
+          <div class="small">Style</div>
+          <div><strong>${escapeHtml(styleLine || "—")}</strong></div>
+        </div>
+        <div>
+          <div class="small">Fermentation Status</div>
+          <div><strong>${escapeHtml(fermentationStatus || "—")}</strong></div>
+        </div>
+        ${handlingNote ? `
+          <div>
+            <div class="small">Handling/Bake Note</div>
+            <div><strong>${escapeHtml(handlingNote)}</strong></div>
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
 function flourSpecForDough(d) {
   const pref = d.prefermentType;
   const hours = normalizeFermentationHours(d.fermentationHours, pref);
@@ -2745,9 +2883,6 @@ function renderMaking() {
   const flourType = flourTypeForDough(d);
   const ov = getSelectedOven();
   const prog = getSelectedOvenProgram(ov);
-  const tempTargets = getProgramTempTargets(prog);
-  const ovenLabel = escapeHtml(ov?.label || "—");
-  const programLabel = escapeHtml(prog?.display_name || prog?.id || "—");
 
   const measured = STATE.making?.measured || {};
   const liveWaterRec = recommendWaterTempC();
@@ -2963,26 +3098,7 @@ function renderMaking() {
 
   root.innerHTML = `
     <div class="making-sticky">
-      <div class="card making-temp-card">
-        <div class="small">Target cooking temp</div>
-        <div class="making-temp-values">
-          ${tempTargets.length ? tempTargets.map((target) => `
-            <div class="making-temp-item">
-              <div class="small">${escapeHtml(target.label)}</div>
-              <div class="making-temp-value">${escapeHtml(target.value)}</div>
-            </div>
-          `).join("") : `
-            <div class="making-temp-item">
-              <div class="small">Setting</div>
-              <div class="making-temp-value">—</div>
-            </div>
-          `}
-        </div>
-        <div class="small making-temp-meta">
-          Oven: <strong>${ovenLabel}</strong>
-          ${prog ? ` • Setting: <strong>${programLabel}</strong>` : ""}
-        </div>
-      </div>
+      ${buildSessionSnapshot()}
     </div>
 
     ${measureNowCard}
