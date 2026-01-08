@@ -847,7 +847,7 @@ function firstFinite(...vals) {
 
     root.innerHTML = `
       <div class="card">
-        <h2>Pizza Night Dashboard</h2>
+        <h2>Pizza Party Dashboard</h2>
         <p>One dough for everyone. Orders only change how many balls you need (minimum ${MIN_BALLS}).</p>
 
         <div class="kpi">
@@ -1344,9 +1344,12 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
 
 
   root.innerHTML = `
-    <div class="card">
-      <h2>Orders</h2>
-      <p>Add people, then add pizzas. Everyone uses the same dough from Session. This tab is toppings + formats only.</p>
+      <div class="card">
+        <h2>Orders</h2>
+        <p>Add people, then add pizzas. Everyone uses the same dough from Session. This tab is toppings + formats only.</p>
+        <div class="small" style="margin-top:6px;">
+          Dough constraint active: allowed pizza formats are <strong>${escapeHtml(allowedFormats.join(", "))}</strong>.
+        </div>
       <div class="grid-2">
         <div>
           <label>Add person</label>
@@ -2774,34 +2777,13 @@ function renderMaking() {
     </div>
 
     <div class="card">
-      <h2>Pizza Making</h2>
+      <h2>Pizzaiolo</h2>
       <p>Execution console: measure, weigh, and run the timeline.</p>
     </div>
 
     ${ingredientWarnings}
     ${hasPref ? prefermentStepA + prefermentStepB + totalsReference : weighOutTotals}
-      <h3>Weigh Out Now (Large Numbers)</h3>
-
-      <div class="kpi" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
-        <div class="box">
-          <div class="small">FLOUR</div>
-          <div class="v" style="font-size:34px;">${dough.flourG} g</div>
-        </div>
-        <div class="box">
-          <div class="small">WATER</div>
-          <div class="v" style="font-size:34px;">${dough.waterG} g</div>
-        </div>
-        <div class="box">
-          <div class="small">SALT</div>
-          <div class="v" style="font-size:34px;">${dough.saltG} g</div>
-        </div>
-        <div class="box">
-          <div class="small">HONEY</div>
-          <div class="v" style="font-size:34px;">${dough.honeyG} g</div>
-        </div>
-      </div>
-
-      ${hasPref ? `
+    ${hasPref ? `
         <div class="card" style="margin-top:12px;">
           <h3 style="margin:0 0 10px;">Preferment Split (Flour)</h3>
           <div class="kpi" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
@@ -2823,7 +2805,6 @@ function renderMaking() {
           </div>
         </div>
       ` : ``}
-    </div>
 
     <div class="card">
       <h3>Measure Now (Live Temps)</h3>

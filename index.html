@@ -8,10 +8,10 @@
 </head>
 <body>
   <nav class="tabs" id="tabs">
-    <button class="tab-btn" data-tab="session">Session</button>
+    <button class="tab-btn" data-tab="session">Pizza Party</button>
     <button class="tab-btn" data-tab="orders">Orders</button>
-    <button class="tab-btn" data-tab="making">Pizza Making</button>
-    <button class="tab-btn" data-tab="shopping">Shopping</button>
+    <button class="tab-btn" data-tab="making">Pizzaiolo</button>
+    <button class="tab-btn" data-tab="shopping">Shopping List</button>
     <button class="tab-btn" data-tab="presets">Pizza Presets</button>
     <button class="tab-btn" data-tab="debug">Debug</button>
     <label class="debug-toggle">
@@ -23,10 +23,6 @@
   <main class="content">
   <div id="appBanner"></div>
   <section id="debug-panel" class="debug-panel"></section>
-    <div class="small" style="margin-top:6px;">
-  Dough constraint active: allowed pizza formats are <strong>${escapeHtml(allowedFormats.join(", "))}</strong>.
-</div>
-
   <section id="tab-session" class="tab-panel active"></section>
   <section id="tab-orders" class="tab-panel"></section>
   <section id="tab-making" class="tab-panel"></section>

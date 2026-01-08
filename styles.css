@@ -100,8 +100,11 @@ body{
   display:flex;
   flex-direction:column;
   gap:8px;
-  background:linear-gradient(180deg, rgba(249,115,22,.18), rgba(255,255,255,.05));
-  border-color:rgba(249,115,22,.35);
+  background:rgba(11,18,32,.96);
+  border-color:rgba(249,115,22,.45);
+  box-shadow:0 16px 30px rgba(0,0,0,.35);
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
 }
 
 .making-temp-values{
