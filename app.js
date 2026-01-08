@@ -524,6 +524,34 @@ function getSelectedOvenProgram(ov) {
   return ov.programs.find(p => p.id === STATE.ovenProgramId) || ov.programs[0];
 }
 
+const TEMP_TARGET_LABELS = {
+  deck: "Deck",
+  top: "Top",
+  air: "Air",
+  stone: "Stone"
+};
+
+function formatTempRangeF(range) {
+  if (!Array.isArray(range)) return "—";
+  const min = Number(range[0]);
+  const max = Number(range[1]);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return "—";
+  if (!Number.isFinite(max) || min === max) return `${round(min, 0)}°F`;
+  return `${round(min, 0)}–${round(max, 0)}°F`;
+}
+
+function getProgramTempTargets(prog) {
+  const targets = prog?.temp_targets_f;
+  if (!targets || typeof targets !== "object") return [];
+  return Object.entries(targets)
+    .filter(([, range]) => Array.isArray(range) && range.length)
+    .map(([key, range]) => ({
+      key,
+      label: TEMP_TARGET_LABELS[key] || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      value: formatTempRangeF(range)
+    }));
+}
+
   /* ---------- Dough totals ---------- */
   function computeDough() {
     const d = STATE.dough;
@@ -2322,6 +2350,9 @@ function renderMaking() {
   const flourSpec = flourSpecForDough(d);
   const ov = getSelectedOven();
   const prog = getSelectedOvenProgram(ov);
+  const tempTargets = getProgramTempTargets(prog);
+  const ovenLabel = escapeHtml(ov?.label || "—");
+  const programLabel = escapeHtml(prog?.display_name || prog?.id || "—");
 
   const measured = STATE.making?.measured || {};
   const liveWaterRec = recommendWaterTempC();
@@ -2331,6 +2362,29 @@ function renderMaking() {
   const hasPref = prefType && prefType !== "direct" && dough.prefermentFlourG > 0;
 
   root.innerHTML = `
+    <div class="making-sticky">
+      <div class="card making-temp-card">
+        <div class="small">Target cooking temp</div>
+        <div class="making-temp-values">
+          ${tempTargets.length ? tempTargets.map((target) => `
+            <div class="making-temp-item">
+              <div class="small">${escapeHtml(target.label)}</div>
+              <div class="making-temp-value">${escapeHtml(target.value)}</div>
+            </div>
+          `).join("") : `
+            <div class="making-temp-item">
+              <div class="small">Program</div>
+              <div class="making-temp-value">—</div>
+            </div>
+          `}
+        </div>
+        <div class="small making-temp-meta">
+          Oven: <strong>${ovenLabel}</strong>
+          ${prog ? ` • Program: <strong>${programLabel}</strong>` : ""}
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <h2>Pizza Making</h2>
       <p>Execution console: measure, weigh, and run the timeline.</p>
