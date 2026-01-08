@@ -365,7 +365,7 @@ const BASE_OVENS_RAW = [
       mixingMethod: "hand",           // hand | halo
       yeastType: "idy",               // idy | ady | fresh
       yeastPct: 0.05,
-      fermentationLocation: "cold",   // room | cold | hybrid
+      fermentationLocation: "cold",   // room | cold | hybrid | double
       fermentationHours: 24,
 
       prefermentType: "direct",       // direct | poolish | biga | sourdough
@@ -459,6 +459,10 @@ if (STATE.ovenProgramId != null && typeof STATE.ovenProgramId !== "string") {
     if (!STATE.dough.temps) STATE.dough.temps = { roomC: 22, flourC: 22, targetDDTC: 23 };
     if (STATE.dough.prefermentType !== "direct" && !isFinite(Number(STATE.dough.prefermentPct))) STATE.dough.prefermentPct = 30;
     if (!isFinite(Number(STATE.dough.fermentationHours))) STATE.dough.fermentationHours = 24;
+    STATE.dough.fermentationHours = normalizeFermentationHours(
+      STATE.dough.fermentationHours,
+      STATE.dough.prefermentType
+    );
 
     // normalize orders
     for (const person of STATE.orders) {
@@ -590,7 +594,7 @@ function getOvenById(id) {
     if (def.yeastPct != null) STATE.dough.yeastPct = def.yeastPct;
     STATE.dough.prefermentType = def.prefermentType;
     STATE.dough.prefermentPct = def.prefermentPct;
-    STATE.dough.fermentationHours = def.fermentationHours;
+    STATE.dough.fermentationHours = normalizeFermentationHours(def.fermentationHours, def.prefermentType);
     STATE.dough.fermentationLocation = def.fermentationLocation;
     STATE.dough.temps.targetDDTC = def.ddtC;
 
@@ -763,29 +767,53 @@ function firstFinite(...vals) {
   return NaN;
 }
 
+const FERMENTATION_HOUR_OPTIONS = [0, 24, 48];
+
+function getFermentationHourOptions(prefermentType) {
+  const pref = String(prefermentType || "direct").toLowerCase();
+  return pref === "direct" ? FERMENTATION_HOUR_OPTIONS : FERMENTATION_HOUR_OPTIONS.filter((h) => h !== 0);
+}
+
+function normalizeFermentationHours(hours, prefermentType) {
+  const options = getFermentationHourOptions(prefermentType);
+  const parsed = Number(hours);
+  if (Number.isFinite(parsed) && options.includes(parsed)) return parsed;
+  if (options.includes(24)) return 24;
+  return options[0] ?? 24;
+}
 
   function doughModeCopy() {
     const d = STATE.dough;
     const pref = d.prefermentType;
     const loc = d.fermentationLocation;
+    const hours = normalizeFermentationHours(d.fermentationHours, pref);
 
     const prefCopy =
       pref === "direct"
-        ? "Direct dough: clean, straightforward flavor. Great baseline."
+        ? "Direct dough: clean, straightforward flavor."
         : pref === "poolish"
-        ? "Poolish: sweeter aroma, extensibility, gentle complexity. Great for lightness."
+        ? "Poolish: sweeter aroma, extensibility, gentle complexity."
         : pref === "biga"
-        ? "Biga: strength + structure, nuttier aroma, controlled fermentation. Excellent for dramatic lift."
-        : "Sourdough: deeper complexity and aroma. Timing is variable; starter peak is the truth signal.";
+        ? "Biga: strength + structure, nuttier aroma, controlled fermentation."
+        : "Sourdough: deeper complexity and aroma; peak timing matters.";
+
+    const timeCopy =
+      hours === 0
+        ? "Same-day ferment: mild flavor, tighter structure. Keep it warm and bake soon."
+        : hours === 24
+        ? "24h ferment: balanced flavor, good extensibility, classic Neapolitan feel."
+        : "48h ferment: deeper aroma, silkier texture, handle gently with stronger flour.";
 
     const locCopy =
       loc === "room"
-        ? "Room-temp fermentation: faster, more sensitive to temperature. Watch the dough."
+        ? "Room-temp fermentation: faster and sensitive to temperature swings."
         : loc === "cold"
-        ? "Cold fermentation: predictable handling and cleaner scheduling. Flavor develops slowly."
-        : "Hybrid: start at room temp for activity, then cold for control and flavor.";
+        ? "Cold fermentation: predictable handling and slower flavor build."
+        : loc === "hybrid"
+        ? "Hybrid: start at room temp for activity, then cold for control."
+        : "Double fermentation: start warm, cold to build flavor, then finish at room temp for bake-ready dough.";
 
-    return `${prefCopy} ${locCopy}`;
+    return `${prefCopy} ${timeCopy} ${locCopy}`;
   }
 
   function getSelectedOven() {
@@ -860,6 +888,8 @@ function firstFinite(...vals) {
     const ballsUsed = ensureMinimumBallLogic();
     const ov = getSelectedOven();
     const prog = getSelectedOvenProgram(ov);
+    const showProgramSelect = ov?.programs?.length && ov?.fuelType !== "wood";
+    const fermHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
 
     root.innerHTML = `
       <div class="card">
@@ -899,9 +929,9 @@ function firstFinite(...vals) {
               ${ov?.constraints?.supports_round_only ? ` • Round only` : ""}
             </div>
 
-            ${ov?.programs?.length ? `
+            ${showProgramSelect ? `
               <div style="margin-top:10px;">
-                <label>Program</label>
+                <label>Setting</label>
                 <select id="ovenProgramSelect">
                   ${ov.programs.map(p => `
                     <option value="${p.id}" ${(prog && p.id === prog.id) ? "selected" : ""}>
@@ -915,12 +945,6 @@ function firstFinite(...vals) {
                   ${prog?.rotation_strategy ? ` • Rotation: ${escapeHtml(prog.rotation_strategy)}` : ""}
                   ${prog?.launch_method ? ` • Launch: ${escapeHtml(prog.launch_method)}` : ""}
                 </div>
-
-                ${Array.isArray(prog?.notes_md) && prog.notes_md.length ? `
-                  <div class="small" style="margin-top:6px;">
-                    ${escapeHtml(prog.notes_md.join(" "))}
-                  </div>
-                ` : ""}
               </div>
             ` : ""}
           </div>
@@ -969,13 +993,16 @@ function firstFinite(...vals) {
               <option value="cold" ${d.fermentationLocation === "cold" ? "selected" : ""}>Cold (fridge)</option>
               <option value="room" ${d.fermentationLocation === "room" ? "selected" : ""}>Room temp</option>
               <option value="hybrid" ${d.fermentationLocation === "hybrid" ? "selected" : ""}>Hybrid (room → cold)</option>
+              <option value="double" ${d.fermentationLocation === "double" ? "selected" : ""}>Double ferment (room → cold → room)</option>
             </select>
           </div>
           <div>
-            <label>Total fermentation time (hours) <span class="dirty-indicator" data-dirty-for="fermHours" hidden></span></label>
-            <input type="text" id="fermHours" inputmode="numeric" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("fermHours", Number(d.fermentationHours || 24)))}">
-            <div class="input-error" data-error-for="fermHours" hidden></div>
+            <label>Total fermentation time (hours)</label>
+            <select id="fermHours">
+              ${getFermentationHourOptions(d.prefermentType).map((hrs) => `
+                <option value="${hrs}" ${fermHours === hrs ? "selected" : ""}>${hrs}</option>
+              `).join("")}
+            </select>
             <div class="small">Typical: 24h Neapolitan; 48h pan/teglia.</div>
           </div>
         </div>
@@ -1142,6 +1169,7 @@ function firstFinite(...vals) {
     $("#prefType").onchange = (e) => {
       d.prefermentType = e.target.value;
       if (d.prefermentType === "direct") d.prefermentPct = 0;
+      d.fermentationHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
       saveState();
       render();
     };
@@ -1159,14 +1187,11 @@ function firstFinite(...vals) {
     });
 
     $("#fermLoc").onchange = (e) => { d.fermentationLocation = e.target.value; saveState(); render(); };
-    bindNumericInput($("#fermHours"), {
-      key: "fermHours",
-      getValue: () => Number(d.fermentationHours || 24),
-      setValue: (value) => { d.fermentationHours = clamp(value, 6, 96); },
-      min: 6,
-      max: 96,
-      integer: true
-    });
+    $("#fermHours").onchange = (e) => {
+      d.fermentationHours = normalizeFermentationHours(e.target.value, d.prefermentType);
+      saveState();
+      render();
+    };
 
     $("#mixMethod").onchange = (e) => { d.mixingMethod = e.target.value; saveState(); render(); };
     $("#yeastType").onchange = (e) => { d.yeastType = e.target.value; saveState(); render(); };
@@ -1683,7 +1708,7 @@ function computeTimelineInputs() {
 
   const envLegacy = d.bakeEnvironment || "";
   const pref = d.prefermentType || "direct";
-  const hoursTotal = clamp(Number(d.fermentationHours || 24), 6, 96);
+  const hoursTotal = normalizeFermentationHours(d.fermentationHours, pref);
   const loc = d.fermentationLocation || "cold";
 
   const preheatMin =
@@ -1694,7 +1719,7 @@ function computeTimelineInputs() {
         : 30;
 
   const benchMin = pref === "sourdough" ? 120 : 90;
-  const bulkMin = loc === "room" ? 180 : 60;
+  const bulkMin = loc === "room" ? 180 : loc === "double" ? 120 : 60;
 
   const mixerId = STATE.mixerId || d.mixingMethod || "hand";
   const mixMin =
@@ -1707,7 +1732,9 @@ function computeTimelineInputs() {
       ? Math.max(0, hoursTotal - 4)
       : loc === "hybrid"
         ? Math.max(0, hoursTotal - 6)
-        : Math.max(0, hoursTotal - 6);
+        : loc === "double"
+          ? Math.max(0, hoursTotal - 8)
+          : Math.max(0, hoursTotal - 6);
 
   const prefermentLeadH =
     pref === "poolish" ? Math.min(16, Math.max(8, hoursTotal * 0.5)) :
@@ -1800,8 +1827,9 @@ function validateState() {
   }
 
   const fermHours = Number(d.fermentationHours);
-  if (!isFinite(fermHours) || fermHours < 6 || fermHours > 96) {
-    errors.push("Fermentation hours must be between 6 and 96.");
+  const fermOptions = getFermentationHourOptions(d.prefermentType);
+  if (!isFinite(fermHours) || !fermOptions.includes(fermHours)) {
+    errors.push(`Fermentation hours must be ${fermOptions.join(", ")}.`);
   }
 
   const prefPct = Number(d.prefermentPct);
@@ -1938,8 +1966,10 @@ function renderDebug() {
 
   // Keep old env string as fallback for legacy state + existing copy
   const envLegacy = d.bakeEnvironment; // "wfo" | "breville" | (maybe others)
+  const prog = getSelectedOvenProgram(ov);
+  const programNotes = Array.isArray(prog?.notes_md) ? prog.notes_md.join(" ") : "";
   const pref = d.prefermentType;
-  const hoursTotal = clamp(Number(d.fermentationHours || 24), 6, 96);
+  const hoursTotal = normalizeFermentationHours(d.fermentationHours, pref);
   const loc = d.fermentationLocation;
 
   // Determine oven category safely (THIS FIXES YOUR "env is not defined" CRASH)
@@ -1959,7 +1989,7 @@ function renderDebug() {
   const benchMin = pref === "sourdough" ? 120 : 90;
 
   // Bulk rest
-  const bulkMin = loc === "room" ? 180 : 60;
+  const bulkMin = loc === "room" ? 180 : loc === "double" ? 120 : 60;
 
   // Mix time: prefer actual mixer selection if you have it, else fall back to legacy mixingMethod
   const mixerId = STATE.mixerId || d.mixingMethod;
@@ -1974,7 +2004,9 @@ function renderDebug() {
       ? Math.max(0, hoursTotal - 4)
       : loc === "hybrid"
         ? Math.max(0, hoursTotal - 6)
-        : Math.max(0, hoursTotal - 6);
+        : loc === "double"
+          ? Math.max(0, hoursTotal - 8)
+          : Math.max(0, hoursTotal - 6);
 
   // Preferment lead estimate (kept from your original)
   const prefermentLeadH =
@@ -2043,7 +2075,9 @@ function renderDebug() {
       ? "Cold ferment begins. Cover well. This is your predictability phase."
       : loc === "hybrid"
         ? "Move to cold to slow and control. Flavor builds while schedule stabilizes."
-        : "Optional short cold rest if needed for handling."
+        : loc === "double"
+          ? "Move to cold for the mid-phase. Plan a final room-temp window before bake."
+          : "Optional short cold rest if needed for handling."
   });
 
   t = new Date(t.getTime() - bulkMin * 60 * 1000);
@@ -2087,22 +2121,30 @@ function renderDebug() {
   const phases = ["Preferment / Starter", "Mixing", "Fermentation", "Dough Handling", "Bake & Serve"];
 
   return phases
-    .map((ph) => ({
-      title: ph,
-      subtitle:
-        ph === "Preferment / Starter"
-          ? "Flavor and structure start here."
-          : ph === "Mixing"
-            ? "Get development without overheating."
-            : ph === "Fermentation"
-              ? "Time + temperature = predictability."
-              : ph === "Dough Handling"
-                ? "Gentle handling preserves air."
-                : "Cadence and consistency win.",
-      items: steps
+    .map((ph) => {
+      const items = steps
         .filter((s) => s.phase === ph)
-        .map((s) => ({ time: s.time, text: s.text }))
-    }))
+        .map((s) => ({ time: s.time, text: s.text }));
+
+      if (ph === "Bake & Serve" && programNotes) {
+        items.unshift({ time: "Final prep", text: `Setting notes: ${programNotes}` });
+      }
+
+      return {
+        title: ph,
+        subtitle:
+          ph === "Preferment / Starter"
+            ? "Flavor and structure start here."
+            : ph === "Mixing"
+              ? "Get development without overheating."
+              : ph === "Fermentation"
+                ? "Time + temperature = predictability."
+                : ph === "Dough Handling"
+                  ? "Gentle handling preserves air."
+                  : "Cadence and consistency win.",
+        items
+      };
+    })
     .filter((card) => card.items.length > 0);
 }
 /* ============================================================
@@ -2155,9 +2197,12 @@ function getDominantOrderFormat() {
 }
 function flourSpecForDough(d) {
   const pref = d.prefermentType;
-  const hours = clamp(Number(d.fermentationHours || 24), 6, 96);
+  const hours = normalizeFermentationHours(d.fermentationHours, pref);
   const hyd = Number(d.hydrationPct || 63);
-  const isCold = d.fermentationLocation === "cold" || d.fermentationLocation === "hybrid";
+  const isCold =
+    d.fermentationLocation === "cold" ||
+    d.fermentationLocation === "hybrid" ||
+    d.fermentationLocation === "double";
 
   // Base assumptions
   let wMin = 260, wMax = 300;
@@ -2327,7 +2372,7 @@ function computeGuideFacts() {
     finalWaterG,
     ingredientBreakdown,
 
-    fermentationHours: clamp(Number(d.fermentationHours || 24), 6, 96),
+    fermentationHours: normalizeFermentationHours(d.fermentationHours, d.prefermentType),
     fermentationLocation: d.fermentationLocation || "cold",
     mixingMethod: d.mixingMethod || "hand",
     targetDDTC: Number(d.temps?.targetDDTC ?? 23),
@@ -2366,7 +2411,7 @@ function chapterOverview(f) {
     [
       step("What you’re making (dominant style)", `Style detected: ${escapeHtml(f.style)}.`),
       step("Production quantities (global dough)", `Ordered pizzas: ${pizzaCount}. Dough balls used: ${ballsUsed} (min ${MIN_BALLS}). Ball weight: ${d.ballWeightG}g.`),
-      step("Oven & program", `Oven: ${escapeHtml(ovenLine)}. Program: ${escapeHtml(programLine)}.`),
+      step("Oven & setting", `Oven: ${escapeHtml(ovenLine)}. Setting: ${escapeHtml(programLine)}.`),
       step("Temperature discipline (Babi-style)", `Target DDT: ${fmtC(f.targetDDTC)}. Room: ${fmtC(f.roomC)}. Flour: ${fmtC(f.flourC)}. Recommended water temp: ${fmtC(f.waterRec)} (${fmtF(cToF(f.waterRec))}).`)
     ],
     warnings
@@ -2554,6 +2599,11 @@ function chapterFermentationAndBalling(f) {
       "Start at room temp to wake the dough, then move cold to stabilize. " +
       "Use this when you want activity plus scheduling reliability."
     ));
+  } else if (f.fermentationLocation === "double") {
+    steps.push(step(
+      "Double fermentation",
+      "Start at room temp for activity, move cold for flavor and control, then finish at room temp so the dough is bake-ready."
+    ));
   } else {
     steps.push(step(
       "Room fermentation",
@@ -2620,7 +2670,7 @@ function chapterShapingAndBake(f) {
 
     if (f.bakeSec) {
       steps.push(step(
-        "Bake targets (from program)",
+        "Bake targets (from setting)",
         `Target bake time: ${f.bakeSec[0]}–${f.bakeSec[1]} seconds. Rotation strategy: ${escapeHtml(f.prog?.rotation_strategy || "as needed")}. Launch method: ${escapeHtml(f.prog?.launch_method || "on deck")}.`
       ));
     } else {
@@ -2879,7 +2929,7 @@ function renderMaking() {
 
       <div class="small" style="margin-top:10px;">
         Oven: <strong>${escapeHtml(ov?.label || "—")}</strong>
-        ${prog ? ` • Program: <strong>${escapeHtml(prog.display_name || prog.id)}</strong>` : ""}
+        ${prog ? ` • Setting: <strong>${escapeHtml(prog.display_name || prog.id)}</strong>` : ""}
       </div>
     </div>
   `;
@@ -2923,14 +2973,14 @@ function renderMaking() {
             </div>
           `).join("") : `
             <div class="making-temp-item">
-              <div class="small">Program</div>
+              <div class="small">Setting</div>
               <div class="making-temp-value">—</div>
             </div>
           `}
         </div>
         <div class="small making-temp-meta">
           Oven: <strong>${ovenLabel}</strong>
-          ${prog ? ` • Program: <strong>${programLabel}</strong>` : ""}
+          ${prog ? ` • Setting: <strong>${programLabel}</strong>` : ""}
         </div>
       </div>
     </div>
