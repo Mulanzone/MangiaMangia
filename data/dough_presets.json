@@ -1,115 +1,32 @@
-// dough_presets.json
 {
   "schema_version": "2.0.0",
-  "purpose": "Catalogs + authority sensibilities + style formats + flour blends + runnable presets that override dough_methods.json to produce complete session configs and Pizzaiolo instructions.",
-
-  "catalogs": {
-    "authorities": [
-      {
+  "purpose": "Preset-only configuration. Each preset is runnable and self-contained, embedding pizzaiolo sensibilities and (optionally) style/flour-blend reference data for UI display. Overrides use canonical snake_case session keys only and do not redefine flags or math.",
+  "presets": [
+    {
+      "id": "vito_neapolitan_poolish_honey",
+      "label": "Vito — Neapolitan (Poolish + Honey)",
+      "authority_id": "vito",
+      "pizza_style_id": "neapolitan_round",
+      "method_id": "poolish",
+      "oven_type": "gas_pizza_oven",
+      "flour_blend_id": "00_plus_bread",
+      "selection_notes_md": [
+        "Choose this when you want **high extensibility + airy cornicione** with a straightforward home workflow.",
+        "Signature Vito note: **subtle sweetness/aroma** from honey (commonly carried in the poolish).",
+        "Best baked in **gas pizza ovens / stones/steels**; control fermentation via cold proof."
+      ],
+      "embedded_authority": {
         "id": "vito",
         "name": "Vito Iacopelli",
         "sensibilities": {
           "handling": ["extensible", "airy", "approachable"],
           "flavor": ["sweet-aromatic when honey used"],
           "workflow": ["clear home workflow", "poolish-friendly"]
-        },
-        "default_overrides": {
-          "honey_percent": 0.5,
-          "mix_method": "hand",
-          "fermentation_location": "cold",
-          "target_fdt_c": 23
         }
       },
-      {
-        "id": "capuano",
-        "name": "Vincenzo Capuano",
-        "sensibilities": {
-          "handling": ["disciplined", "strong structure", "high-heat ready"],
-          "flavor": ["clean", "balanced"],
-          "workflow": ["biga-leaning for lift/control or clean direct baseline"]
-        },
-        "default_overrides": {
-          "honey_percent": 0.0,
-          "oil_percent": 0.0,
-          "mix_method": "hand",
-          "fermentation_location": "cold",
-          "target_fdt_c": 23
-        }
-      },
-      {
-        "id": "gemignani",
-        "name": "Tony Gemignani (Pizza Bible)",
-        "sensibilities": {
-          "handling": ["repeatable", "production-minded"],
-          "flavor": ["balanced", "often slight oil for handling in some styles"],
-          "workflow": ["process consistency", "measurement discipline"]
-        },
-        "default_overrides": {
-          "honey_percent": 0.0,
-          "mix_method": "hand",
-          "fermentation_location": "cold",
-          "target_fdt_c": 23
-        }
-      },
-      {
-        "id": "bonci",
-        "name": "Gabriele Bonci",
-        "sensibilities": {
-          "handling": ["high hydration", "gentle", "pan-first"],
-          "flavor": ["wheaty", "fermentation-forward"],
-          "workflow": ["cold fermentation common", "oil supports teglia handling"]
-        },
-        "default_overrides": {
-          "oil_percent": 3.0,
-          "honey_percent": 0.0,
-          "mix_method": "hand",
-          "fermentation_location": "cold",
-          "target_fdt_c": 24
-        }
-      },
-      {
-        "id": "bapi",
-        "name": "Benjamin Schmitz (Pizzavibes_bapi)",
-        "sensibilities": {
-          "handling": ["temperature-driven consistency"],
-          "flavor": ["clean"],
-          "workflow": ["DDT-first", "adaptive schedule"]
-        },
-        "default_overrides": {
-          "ddt_model_enabled": true,
-          "target_fdt_c": 24,
-          "fermentation_location": "cold"
-        }
-      },
-      {
-        "id": "bianco",
-        "name": "Chris Bianco",
-        "sensibilities": {
-          "handling": ["restraint", "classic"],
-          "flavor": ["ingredient-forward"],
-          "workflow": ["minimal additions", "simple baseline"]
-        },
-        "default_overrides": {
-          "honey_percent": 0.0,
-          "oil_percent": 0.0,
-          "sugar_percent": 0.0,
-          "diastatic_malt_percent": 0.0,
-          "fermentation_location": "cold",
-          "target_fdt_c": 23
-        }
-      }
-    ],
-
-    "styles": [
-      {
+      "embedded_style": {
         "id": "neapolitan_round",
         "name": "Neapolitan Round",
-        "defaults": {
-          "dough_unit_weight_g": 260,
-          "target_pizza_count": 2,
-          "dough_grams_per_cm2": null,
-          "ball_or_pan_ferment_hours_default": 0
-        },
         "instruction_profile": {
           "topping_logic": "split",
           "rim_preservation": true,
@@ -117,136 +34,46 @@
           "bake_time_seconds_range": [60, 120]
         }
       },
-      {
-        "id": "calzone",
-        "name": "Calzone",
-        "defaults": { "dough_unit_weight_g": 280, "target_pizza_count": 2, "dough_grams_per_cm2": null },
-        "instruction_profile": {
-          "topping_logic": "before",
-          "rim_preservation": false,
-          "par_bake_allowed": false,
-          "bake_time_seconds_range": [180, 420]
-        }
-      },
-      {
-        "id": "panzerotti",
-        "name": "Panzerotti",
-        "defaults": { "dough_unit_weight_g": 220, "target_pizza_count": 4, "dough_grams_per_cm2": null },
-        "instruction_profile": {
-          "topping_logic": "before",
-          "rim_preservation": false,
-          "par_bake_allowed": false,
-          "bake_time_seconds_range": [180, 360]
-        }
-      },
-      {
-        "id": "focaccia",
-        "name": "Focaccia",
-        "defaults": {
-          "target_pizza_count": 1,
-          "dough_unit_weight_g": 1200,
-          "pan_or_tray_area_cm2": 2000,
-          "dough_grams_per_cm2": 2.2,
-          "ball_or_pan_ferment_hours_default": 6
-        },
-        "instruction_profile": {
-          "topping_logic": "before",
-          "rim_preservation": false,
-          "par_bake_allowed": true,
-          "bake_time_seconds_range": [900, 1500]
-        }
-      },
-      {
-        "id": "teglia_bonci",
-        "name": "Bonci-Style Teglia / Pan",
-        "defaults": {
-          "target_pizza_count": 1,
-          "dough_unit_weight_g": 1200,
-          "pan_or_tray_area_cm2": 2000,
-          "dough_grams_per_cm2": 1.8,
-          "ball_or_pan_ferment_hours_default": 6
-        },
-        "instruction_profile": {
-          "topping_logic": "split",
-          "rim_preservation": false,
-          "par_bake_allowed": true,
-          "bake_time_seconds_range": [720, 1200]
-        }
-      },
-      {
-        "id": "pizza_rossa",
-        "name": "Pizza Rossa",
-        "defaults": {
-          "target_pizza_count": 1,
-          "dough_unit_weight_g": 1000,
-          "pan_or_tray_area_cm2": 2000,
-          "dough_grams_per_cm2": 1.6
-        },
-        "instruction_profile": {
-          "topping_logic": "before",
-          "rim_preservation": false,
-          "par_bake_allowed": true,
-          "bake_time_seconds_range": [600, 960]
-        }
-      },
-      {
-        "id": "dessert_pizza",
-        "name": "Dessert Pizza",
-        "defaults": { "dough_unit_weight_g": 240, "target_pizza_count": 2, "dough_grams_per_cm2": null },
-        "instruction_profile": {
-          "topping_logic": "after",
-          "rim_preservation": true,
-          "par_bake_allowed": true,
-          "bake_time_seconds_range": [180, 360]
-        }
-      }
-    ],
-
-    "flour_blends": [
-      { "id": "00_only", "name": "100% 00 Flour", "parts": [{ "name": "00 Flour", "pct": 100 }] },
-      {
+      "embedded_flour_blend": {
         "id": "00_plus_bread",
         "name": "70% 00 + 30% Bread Flour",
-        "parts": [{ "name": "00 Flour", "pct": 70 }, { "name": "Bread Flour", "pct": 30 }]
+        "parts": [
+          { "name": "00 Flour", "pct": 70 },
+          { "name": "Bread Flour", "pct": 30 }
+        ]
       },
-      {
-        "id": "bonci_blend",
-        "name": "Bonci Blend (50% Bread + 50% Strong)",
-        "parts": [{ "name": "Bread Flour", "pct": 50 }, { "name": "Strong Flour", "pct": 50 }]
-      },
-      { "id": "custom", "name": "Custom Blend", "parts": [] }
-    ]
-  },
-
-  "preset_resolution_order": [
-    "method.defaults (from dough_methods.json)",
-    "style.defaults (from catalogs.styles)",
-    "authority.default_overrides (from catalogs.authorities)",
-    "preset.overrides (this file)",
-    "user_session_overrides (Session tab inputs)"
-  ],
-
-  "presets": [
-    {
-      "id": "vito_neapolitan_poolish_honey",
-      "label": "Vito — Neapolitan (Poolish + Honey)",
-      "authority_id": "vito",
-      "style_id": "neapolitan_round",
-      "method_id": "poolish",
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 71.4,
         "salt_percent": 2.86,
+        "oil_percent": 0.0,
         "honey_percent": 0.71,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
+        "yeast_type": "idy",
+        "yeast_percent": 0.05,
+
+        "preferment_enabled": true,
+        "preferment_type": "poolish",
         "preferment_flour_percent_of_total": 29,
         "preferment_hydration_percent": 100,
         "preferment_mature_hours": 12,
-        "yeast_type": "idy",
-        "yeast_percent": 0.05,
+
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 0,
         "cold_ferment_hours": 24,
         "ball_or_pan_ferment_hours": 0,
-        "target_fdt_c": 23
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 23,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "honey_placement": "preferment",
@@ -261,19 +88,69 @@
       "id": "vito_neapolitan_direct_honey",
       "label": "Vito — Neapolitan (Direct + Honey)",
       "authority_id": "vito",
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "direct",
+      "oven_type": "gas_pizza_oven",
+      "flour_blend_id": "00_plus_bread",
+      "selection_notes_md": [
+        "Choose this when you want **Vito’s approachable workflow** without building a preferment.",
+        "Signature: **slight sweetness/aroma** from honey, added in the final mix.",
+        "Good all-rounder for home schedules; cold ferment carries flavor."
+      ],
+      "embedded_authority": {
+        "id": "vito",
+        "name": "Vito Iacopelli",
+        "sensibilities": {
+          "handling": ["extensible", "airy", "approachable"],
+          "flavor": ["sweet-aromatic when honey used"],
+          "workflow": ["clear home workflow", "direct-friendly"]
+        }
+      },
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "00_plus_bread",
+        "name": "70% 00 + 30% Bread Flour",
+        "parts": [
+          { "name": "00 Flour", "pct": 70 },
+          { "name": "Bread Flour", "pct": 30 }
+        ]
+      },
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 63.0,
         "salt_percent": 2.8,
+        "oil_percent": 0.0,
         "honey_percent": 0.5,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
         "yeast_type": "idy",
         "yeast_percent": 0.06,
+
+        "preferment_enabled": false,
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 4,
         "cold_ferment_hours": 20,
         "ball_or_pan_ferment_hours": 0,
-        "target_fdt_c": 23
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 23,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "honey_placement": "final_mix",
@@ -285,21 +162,90 @@
       "id": "capuano_neapolitan_biga_structure",
       "label": "Capuano — Neapolitan (Biga / Structure)",
       "authority_id": "capuano",
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "biga",
+      "oven_type": "wood_fired",
+      "flour_blend_id": "00_only",
+      "selection_notes_md": [
+        "Choose this when you want **structure-first Neapolitan**: strong rim, controlled extensibility, clean fermentation.",
+        "Signature: **discipline**—tight temperature control, correct preferment maturity, and avoiding dough overheating.",
+        "Best for **high-heat** environments; keep additions minimal (no honey/sugar/malt)."
+      ],
+      "embedded_authority": {
+        "id": "capuano",
+        "name": "Vincenzo Capuano",
+        "sensibilities": {
+          "handling": [
+            "structure-first extensibility",
+            "disciplined gluten development",
+            "fast shaping with minimal degassing",
+            "high-heat ready dough strength"
+          ],
+          "flavor": [
+            "clean fermentation profile",
+            "balanced salt-forward finish",
+            "minimal additions for clarity"
+          ],
+          "workflow": [
+            "biga-leaning for lift and control",
+            "keep preferment cool to preserve strength",
+            "incorporate biga thoroughly without overheating final dough",
+            "tight fermentation timing to avoid slack dough"
+          ],
+          "quality_controls": [
+            "FDT discipline (hit target dough temp consistently)",
+            "preferment maturity window adherence",
+            "mix intensity scaled to flour strength and hydration"
+          ]
+        }
+      },
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "00_only",
+        "name": "100% 00 Flour",
+        "parts": [{ "name": "00 Flour", "pct": 100 }]
+      },
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 61.5,
         "salt_percent": 2.9,
+        "oil_percent": 0.0,
+        "honey_percent": 0.0,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
+        "yeast_type": "idy",
+        "yeast_percent": 0.05,
+
+        "preferment_enabled": true,
+        "preferment_type": "biga",
         "preferment_flour_percent_of_total": 45,
         "preferment_hydration_percent": 45,
         "preferment_mature_hours": 16,
-        "yeast_type": "idy",
-        "yeast_percent": 0.05,
+
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 2,
         "cold_ferment_hours": 22,
         "ball_or_pan_ferment_hours": 0,
-        "target_fdt_c": 23
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 23,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "notes_md": [
@@ -313,20 +259,73 @@
       "id": "capuano_neapolitan_direct_clean",
       "label": "Capuano — Neapolitan (Direct / Clean)",
       "authority_id": "capuano",
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "direct",
+      "oven_type": "wood_fired",
+      "flour_blend_id": "00_only",
+      "selection_notes_md": [
+        "Choose this when you want **Capuano’s clean, minimal direct dough**—simple, repeatable, oven-ready.",
+        "Signature: **no sweeteners/oil**, balanced salt, strong fermentation control.",
+        "Ideal when you want fewer moving parts than biga but still want high-heat performance."
+      ],
+      "embedded_authority": {
+        "id": "capuano",
+        "name": "Vincenzo Capuano",
+        "sensibilities": {
+          "handling": [
+            "disciplined gluten development",
+            "clean shaping",
+            "high-heat readiness"
+          ],
+          "flavor": ["clean", "balanced", "minimal additions"],
+          "workflow": [
+            "direct baseline for consistency",
+            "temperature and timing discipline"
+          ]
+        }
+      },
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "00_only",
+        "name": "100% 00 Flour",
+        "parts": [{ "name": "00 Flour", "pct": 100 }]
+      },
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 62.0,
         "salt_percent": 2.7,
+        "oil_percent": 0.0,
+        "honey_percent": 0.0,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
         "yeast_type": "idy",
         "yeast_percent": 0.06,
-        "honey_percent": 0.0,
-        "oil_percent": 0.0,
+
+        "preferment_enabled": false,
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 4,
         "cold_ferment_hours": 20,
         "ball_or_pan_ferment_hours": 0,
-        "target_fdt_c": 23
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 23,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       }
     },
 
@@ -334,18 +333,66 @@
       "id": "gemignani_neapolitan_precision",
       "label": "Gemignani — Precision Neapolitan",
       "authority_id": "gemignani",
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "direct",
+      "oven_type": "gas_pizza_oven",
+      "flour_blend_id": "00_only",
+      "selection_notes_md": [
+        "Choose this when you want **repeatability and measurement discipline**.",
+        "Signature: dough temp awareness, consistent timing, and production-friendly workflow.",
+        "A clean, balanced direct dough that rewards precision."
+      ],
+      "embedded_authority": {
+        "id": "gemignani",
+        "name": "Tony Gemignani (Pizza Bible)",
+        "sensibilities": {
+          "handling": ["repeatable", "production-minded"],
+          "flavor": ["balanced"],
+          "workflow": ["process consistency", "measurement discipline"]
+        }
+      },
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "00_only",
+        "name": "100% 00 Flour",
+        "parts": [{ "name": "00 Flour", "pct": 100 }]
+      },
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 62.5,
         "salt_percent": 2.6,
+        "oil_percent": 0.0,
+        "honey_percent": 0.0,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
         "yeast_type": "idy",
         "yeast_percent": 0.05,
+
+        "preferment_enabled": false,
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 4,
         "cold_ferment_hours": 20,
         "ball_or_pan_ferment_hours": 0,
-        "target_fdt_c": 23
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 23,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "notes_md": ["Emphasize repeatability: weigh precisely; track dough temperature."]
@@ -356,22 +403,76 @@
       "id": "bonci_teglia_high_hydration",
       "label": "Bonci — Teglia / Pan (High Hydration)",
       "authority_id": "bonci",
-      "style_id": "teglia_bonci",
+      "pizza_style_id": "teglia_bonci",
       "method_id": "poolish",
+      "oven_type": "home_electric",
+      "flour_blend_id": "bonci_blend",
+      "selection_notes_md": [
+        "Choose this for **pan-first, high-hydration** dough with gentle handling and strong fermentation character.",
+        "Signature: **wheaty flavor**, open crumb, and workflow that favors cold fermentation and pan oiling.",
+        "Supports split-bake (par-bake + toppings) for crisp exterior and airy interior."
+      ],
+      "embedded_authority": {
+        "id": "bonci",
+        "name": "Gabriele Bonci",
+        "sensibilities": {
+          "handling": ["high hydration", "gentle", "pan-first"],
+          "flavor": ["wheaty", "fermentation-forward"],
+          "workflow": ["cold fermentation common", "oil supports teglia handling"]
+        }
+      },
+      "embedded_style": {
+        "id": "teglia_bonci",
+        "name": "Bonci-Style Teglia / Pan",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": false,
+          "par_bake_allowed": true,
+          "bake_time_seconds_range": [720, 1200]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "bonci_blend",
+        "name": "Bonci Blend (50% Bread + 50% Strong)",
+        "parts": [
+          { "name": "Bread Flour", "pct": 50 },
+          { "name": "Strong Flour", "pct": 50 }
+        ]
+      },
       "overrides": {
+        "target_pizza_count": 1,
+        "dough_unit_weight_g": 1200,
+        "pan_or_tray_area_cm2": 2000,
+        "dough_grams_per_cm2": 1.8,
+
         "hydration_percent": 80.0,
         "salt_percent": 2.6,
         "oil_percent": 3.0,
+        "honey_percent": 0.0,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
+        "yeast_type": "idy",
+        "yeast_percent": 0.04,
+
+        "preferment_enabled": true,
+        "preferment_type": "poolish",
         "preferment_flour_percent_of_total": 60,
         "preferment_hydration_percent": 100,
         "preferment_mature_hours": 12,
-        "yeast_type": "idy",
-        "yeast_percent": 0.04,
+
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 4,
         "cold_ferment_hours": 44,
         "ball_or_pan_ferment_hours": 6,
-        "target_fdt_c": 24
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 24,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "pan_handling": {
@@ -390,19 +491,66 @@
       "id": "bapi_temp_aware_neapolitan",
       "label": "BAPI — Temperature-Driven Neapolitan",
       "authority_id": "bapi",
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "direct",
+      "oven_type": "gas_pizza_oven",
+      "flour_blend_id": "00_only",
+      "selection_notes_md": [
+        "Choose this when you want **DDT-first consistency**: hit target dough temperature and let the schedule behave.",
+        "Signature: temperature-driven workflow; adjust water temp rather than guessing fermentation.",
+        "Excellent for repeatable results across seasons."
+      ],
+      "embedded_authority": {
+        "id": "bapi",
+        "name": "Benjamin Schmitz (Pizzavibes_bapi)",
+        "sensibilities": {
+          "handling": ["temperature-driven consistency"],
+          "flavor": ["clean"],
+          "workflow": ["DDT-first", "adaptive schedule"]
+        }
+      },
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "00_only",
+        "name": "100% 00 Flour",
+        "parts": [{ "name": "00 Flour", "pct": 100 }]
+      },
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 63.0,
         "salt_percent": 2.8,
+        "oil_percent": 0.0,
+        "honey_percent": 0.0,
+        "sugar_percent": 0.0,
+        "diastatic_malt_percent": 0.0,
+
         "yeast_type": "idy",
         "yeast_percent": 0.05,
+
+        "preferment_enabled": false,
+        "starter_enabled": false,
+
         "ddt_model_enabled": true,
         "target_fdt_c": 24,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 4,
         "cold_ferment_hours": 20,
-        "ball_or_pan_ferment_hours": 0
+        "ball_or_pan_ferment_hours": 0,
+
+        "mix_method": "hand",
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "notes_md": ["DDT-first: adjust water temperature to hit target final dough temperature."]
@@ -413,22 +561,66 @@
       "id": "bianco_classic_neapolitan",
       "label": "Bianco — Classic Minimal Neapolitan",
       "authority_id": "bianco",
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "direct",
+      "oven_type": "gas_pizza_oven",
+      "flour_blend_id": "00_only",
+      "selection_notes_md": [
+        "Choose this when you want **minimal additions** and ingredient-forward flavor.",
+        "Signature: clean dough profile; fermentation and flour quality do the work.",
+        "Best when you want to taste the wheat and toppings with no sweetness."
+      ],
+      "embedded_authority": {
+        "id": "bianco",
+        "name": "Chris Bianco",
+        "sensibilities": {
+          "handling": ["restraint", "classic"],
+          "flavor": ["ingredient-forward"],
+          "workflow": ["minimal additions", "simple baseline"]
+        }
+      },
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "00_only",
+        "name": "100% 00 Flour",
+        "parts": [{ "name": "00 Flour", "pct": 100 }]
+      },
       "overrides": {
+        "target_pizza_count": 2,
+        "dough_unit_weight_g": 260,
+
         "hydration_percent": 62.0,
         "salt_percent": 2.4,
         "oil_percent": 0.0,
         "honey_percent": 0.0,
         "sugar_percent": 0.0,
         "diastatic_malt_percent": 0.0,
+
         "yeast_type": "idy",
         "yeast_percent": 0.05,
+
+        "preferment_enabled": false,
+        "starter_enabled": false,
+
         "fermentation_location": "cold",
         "bulk_ferment_hours": 4,
         "cold_ferment_hours": 20,
         "ball_or_pan_ferment_hours": 0,
-        "target_fdt_c": 23
+
+        "ddt_model_enabled": true,
+        "target_fdt_c": 23,
+        "mix_method": "hand",
+
+        "batching_max_dough_mass_g": 3500
       },
       "instruction_overrides": {
         "notes_md": ["Minimal additions; prioritize flour quality and fermentation control."]
@@ -439,11 +631,32 @@
       "id": "manual_custom",
       "label": "Custom / Manual",
       "authority_id": null,
-      "style_id": "neapolitan_round",
+      "pizza_style_id": "neapolitan_round",
       "method_id": "direct",
+      "oven_type": "gas_pizza_oven",
+      "flour_blend_id": "custom",
+      "selection_notes_md": [
+        "Choose this to **start from baseline** and dial every parameter yourself.",
+        "Use the Session tab to set schedule, hydration, salt, preferment/starter, and temperatures."
+      ],
+      "embedded_style": {
+        "id": "neapolitan_round",
+        "name": "Neapolitan Round",
+        "instruction_profile": {
+          "topping_logic": "split",
+          "rim_preservation": true,
+          "par_bake_allowed": false,
+          "bake_time_seconds_range": [60, 120]
+        }
+      },
+      "embedded_flour_blend": {
+        "id": "custom",
+        "name": "Custom Blend",
+        "parts": []
+      },
       "overrides": null,
       "instruction_overrides": {
-        "notes_md": ["You control every parameter; defaults come from dough_methods + style."]
+        "notes_md": ["You control every parameter; defaults come from dough_methods + style outputs in-session."]
       }
     }
   ]
