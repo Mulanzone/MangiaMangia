@@ -2247,25 +2247,10 @@ function buildSessionSnapshot() {
   const method = getMethod(d.methodId);
 
   const tempTargets = prog?.temp_targets_f && typeof prog.temp_targets_f === "object"
-    ? Object.entries(prog.temp_targets_f)
-      .filter(([, range]) => Array.isArray(range) && range.length)
-      .map(([key, range]) => {
-        const label = TEMP_TARGET_LABELS[key] || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-        const fRange = formatTempRangeF(range);
-        const cRange = formatTempRangeCFromF(range);
-        const combined = (fRange !== "—" && cRange !== "—")
-          ? `${fRange} / ${cRange}`
-          : (fRange !== "—" ? fRange : cRange);
-        return `${label}: ${combined}`;
-      })
-    : [];
-  const ovenTarget = tempTargets.length ? tempTargets.join(" • ") : "";
-  const ovenLabel = ov?.label || "—";
-  const programLabel = prog?.display_name || prog?.id || "";
-  const ovenMode = programLabel ? `${ovenLabel} — ${programLabel}` : ovenLabel;
-  const ovenLine = [ovenTarget, ovenMode && ovenMode !== "—" ? ovenMode : null]
-    .filter(Boolean)
-    .join(" • ") || "—";
+    ? prog.temp_targets_f
+    : {};
+  const topRange = formatTempRangeF(tempTargets.top || tempTargets.air);
+  const floorRange = formatTempRangeF(tempTargets.deck);
 
   const prefLabel = formatPrefermentLabel(d.prefermentType);
   const fermHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
@@ -2305,30 +2290,39 @@ function buildSessionSnapshot() {
   return `
     <div class="card making-temp-card">
       <h3 style="margin:0 0 10px;">Session Snapshot</h3>
-      <div style="display:grid; gap:10px;">
-        <div>
-          <div class="small">Oven Target</div>
-          <div><strong>${escapeHtml(ovenLine || "—")}</strong></div>
-        </div>
-        <div>
-          <div class="small">Dough Method</div>
-          <div><strong>${escapeHtml(methodLabel || "—")}</strong></div>
-          <div class="small">${escapeHtml(methodMeta || "—")}</div>
-        </div>
-        <div>
-          <div class="small">Style</div>
-          <div><strong>${escapeHtml(styleLine || "—")}</strong></div>
-        </div>
-        <div>
-          <div class="small">Fermentation Status</div>
-          <div><strong>${escapeHtml(fermentationStatus || "—")}</strong></div>
-        </div>
-        ${handlingNote ? `
-          <div>
-            <div class="small">Handling/Bake Note</div>
-            <div><strong>${escapeHtml(handlingNote)}</strong></div>
+      <div class="session-snapshot-grid">
+        <div class="session-snapshot-temps">
+          <div class="small">Oven Target Temps</div>
+          <div class="session-snapshot-temp-block">
+            <div class="session-snapshot-temp-label">Top</div>
+            <div class="session-snapshot-temp-value">${escapeHtml(topRange || "—")}</div>
           </div>
-        ` : ""}
+          <div class="session-snapshot-temp-block">
+            <div class="session-snapshot-temp-label">Floor</div>
+            <div class="session-snapshot-temp-value">${escapeHtml(floorRange || "—")}</div>
+          </div>
+        </div>
+        <div class="session-snapshot-details">
+          <div>
+            <div class="small">Dough Method</div>
+            <div><strong>${escapeHtml(methodLabel || "—")}</strong></div>
+            <div class="small">${escapeHtml(methodMeta || "—")}</div>
+          </div>
+          <div>
+            <div class="small">Style</div>
+            <div><strong>${escapeHtml(styleLine || "—")}</strong></div>
+          </div>
+          <div>
+            <div class="small">Fermentation Status</div>
+            <div><strong>${escapeHtml(fermentationStatus || "—")}</strong></div>
+          </div>
+          ${handlingNote ? `
+            <div>
+              <div class="small">Handling/Bake Note</div>
+              <div><strong>${escapeHtml(handlingNote)}</strong></div>
+            </div>
+          ` : ""}
+        </div>
       </div>
     </div>
   `;
@@ -3097,9 +3091,7 @@ function renderMaking() {
   `;
 
   root.innerHTML = `
-    <div class="making-sticky">
-      ${buildSessionSnapshot()}
-    </div>
+    ${buildSessionSnapshot()}
 
     ${measureNowCard}
     ${makingSummary}
