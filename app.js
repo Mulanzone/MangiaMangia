@@ -18,6 +18,7 @@
     drafts: {},
     errors: {}
   };
+  const DEV = true;
 
   const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
@@ -251,7 +252,7 @@ const CONFIG = {
 
     if (!CONFIG.doughPresets.some((m) => m.id === STATE?.session?.doughPresetId)) {
       if (!STATE.session) STATE.session = defaultState().session;
-      STATE.session.doughPresetId = CONFIG.doughPresets[0]?.id || "manual";
+      STATE.session.doughPresetId = "manual";
     }
   }
 
@@ -401,6 +402,10 @@ const BASE_OVENS_RAW = [
         counterC: null
       }
 },
+    resolved_session_v2: null,
+    derived_session_v2: null,
+    pizzaioloBundle: null,
+    v2Overrides: {},
     session: {
       schemaVersion: "1.0",
       sessionId: cryptoSafeId("session"),
@@ -496,6 +501,7 @@ const BASE_OVENS_RAW = [
     if (!STATE || typeof STATE !== "object") STATE = defaultState();
     if (!STATE.making) STATE.making = { measured: { roomC: null, flourC: null, waterC: null, doughC: null, counterC: null } };
     if (!STATE.making.measured) STATE.making.measured = { roomC: null, flourC: null, waterC: null, doughC: null, counterC: null };
+    if (!STATE.v2Overrides || typeof STATE.v2Overrides !== "object") STATE.v2Overrides = {};
 
     if (typeof STATE.debugMode !== "boolean") STATE.debugMode = false;
     if (!STATE.activeTab) STATE.activeTab = "session";
@@ -768,39 +774,9 @@ const BASE_OVENS_RAW = [
   }
 
   function applyDoughPreset(presetId) {
-    const preset = (CONFIG.doughPresets || []).find((p) => p.id === presetId) || null;
     if (!STATE.session) STATE.session = defaultState().session;
-
-    if (!preset || presetId === "manual" || !preset.defaults) {
-      STATE.session.doughPresetId = presetId;
-      saveState();
-      render();
-      return;
-    }
-
-    const def = preset.defaults;
-    const prefType = String(def.prefermentType || "direct");
-    const normalizedPrefType = prefType === "direct" ? "NONE" : prefType.toUpperCase();
-    resetSessionForPrefermentType(normalizedPrefType, { doughPresetId: presetId });
-
-    STATE.session.formulaOverrides = {
-      ...STATE.session.formulaOverrides,
-      hydrationPct: Number(def.hydrationPct ?? STATE.session.formulaOverrides?.hydrationPct ?? 63),
-      saltPct: Number(def.saltPct ?? STATE.session.formulaOverrides?.saltPct ?? 2.8),
-      honeyPct: Number(def.honeyPct ?? STATE.session.formulaOverrides?.honeyPct ?? 0),
-      yeastPctIDY: Number(def.yeastPct ?? STATE.session.formulaOverrides?.yeastPctIDY ?? 0.05)
-    };
-
-    STATE.session.prefermentType = normalizedPrefType;
-    STATE.session.totalFermentationHours = normalizeFermentationHours(def.fermentationHours, prefType);
-    STATE.session.fermentationLocation =
-      def.fermentationLocation === "cold" ? "FRIDGE" :
-      def.fermentationLocation === "hybrid" ? "HYBRID" :
-      "ROOM";
-    STATE.session.temperaturePlanning = {
-      targetDDTC: Number(def.ddtC ?? STATE.session.temperaturePlanning?.targetDDTC ?? 23)
-    };
-
+    const preset = getV2PresetById(presetId);
+    applyV2PresetOverrides(preset);
     saveState();
     render();
   }
@@ -917,16 +893,335 @@ function getProgramTempTargets(prog) {
     });
   }
 
+  function getResolvedSessionV2() {
+    if (!window.SessionResolverV2 || typeof window.SessionResolverV2.resolveSessionV2 !== "function") {
+      return { resolved_session_v2: null, derived_session_v2: null, warnings: [] };
+    }
+
+    const inputs = window.SessionResolverV2.legacyToV2Inputs({
+      legacy_session: STATE.session
+    });
+    const v2Overrides = STATE.v2Overrides && typeof STATE.v2Overrides === "object" ? STATE.v2Overrides : {};
+
+    const result = window.SessionResolverV2.resolveSessionV2({
+      ...inputs,
+      user_session_overrides_v2: {
+        ...(inputs.user_session_overrides_v2 || {}),
+        ...v2Overrides
+      },
+      orders_state: STATE.orders
+    });
+
+    STATE.resolved_session_v2 = result.resolved_session_v2;
+    STATE.derived_session_v2 = result.derived_session_v2;
+    STATE.pizzaioloBundle = window.SessionResolverV2.getPizzaioloBundle();
+
+    return result;
+  }
+
+  function getV2DashboardTotals() {
+    const result = getResolvedSessionV2();
+    if (!window.SessionResolverV2 || typeof window.SessionResolverV2.v2DerivedToLegacyDashboard !== "function") {
+      return null;
+    }
+    return window.SessionResolverV2.v2DerivedToLegacyDashboard(result.derived_session_v2);
+  }
+
+  function getV2Methods() {
+    if (!window.SessionResolverV2 || typeof window.SessionResolverV2.getMethods !== "function") return [];
+    return window.SessionResolverV2.getMethods() || [];
+  }
+
+  function getV2Presets() {
+    if (!window.SessionResolverV2 || typeof window.SessionResolverV2.getPresets !== "function") return [];
+    return window.SessionResolverV2.getPresets() || [];
+  }
+
+  function getManualPresetOption() {
+    return { id: "manual", label: "Custom / Manual", overrides: null, method_id: null, description: "You control every parameter." };
+  }
+
+  function getV2PresetOptions() {
+    const presets = getV2Presets();
+    if (presets.some((preset) => preset.id === "manual")) return presets;
+    return [getManualPresetOption(), ...presets];
+  }
+
+  function getV2MethodById(id) {
+    const methods = getV2Methods();
+    return methods.find((m) => m.method_id === id) || methods[0] || null;
+  }
+
+  function getV2PresetById(id) {
+    const presets = getV2PresetOptions();
+    return presets.find((p) => p.id === id) || presets[0] || null;
+  }
+
+  function mapV2FermentationLocationToLegacy(loc) {
+    const key = String(loc || "").toLowerCase();
+    if (key === "room") return "ROOM";
+    if (key === "cold") return "FRIDGE";
+    if (key === "mixed") return "HYBRID";
+    return null;
+  }
+
+  function mapV2PrefermentTypeToLegacy(pref) {
+    const key = String(pref || "").toLowerCase();
+    if (key === "poolish") return "POOLISH";
+    if (key === "biga") return "BIGA";
+    if (key === "tiga") return "TIGA";
+    if (key === "hybrid_poolish_biga") return "POOLISH_BIGA_HYBRID";
+    return null;
+  }
+
+  function mapV2YeastTypeToLegacy(yeast) {
+    const key = String(yeast || "").toUpperCase();
+    if (key === "ADY") return "ADY";
+    if (key === "FRESH") return "FRESH";
+    if (key === "STARTER_ONLY") return "IDY";
+    return "IDY";
+  }
+
+  function mapV2StyleToLegacy(styleId) {
+    const key = String(styleId || "").toLowerCase();
+    if (key === "neapolitan_round") return "ROUND_NEAPOLITAN";
+    if (key === "teglia_bonci") return "PAN_SICILIAN_STANDARD";
+    return null;
+  }
+
+  function selectOvenIdForType(ovenType) {
+    if (!Array.isArray(CONFIG.ovens) || !CONFIG.ovens.length) return null;
+    const key = String(ovenType || "").toLowerCase();
+    const match = CONFIG.ovens.find((oven) => {
+      const fuel = String(oven.fuelType || "").toLowerCase();
+      if (key.includes("wood") && fuel.includes("wood")) return true;
+      if (key.includes("gas") && fuel.includes("gas")) return true;
+      if (key.includes("electric") && fuel.includes("electric")) return true;
+      return false;
+    });
+    return match?.id || null;
+  }
+
+  function selectMixerIdForMethod(mixMethod) {
+    const method = String(mixMethod || "").toLowerCase();
+    if (!Array.isArray(CONFIG.mixers) || !CONFIG.mixers.length) return null;
+    const match = CONFIG.mixers.find((m) => String(m.type || "").toLowerCase().includes(method));
+    return match ? match.id : CONFIG.mixers[0]?.id || null;
+  }
+
+  function getMethodRange(method, key, fallbackMin, fallbackMax) {
+    const range = method?.ranges?.[key];
+    if (Array.isArray(range) && range.length === 2) {
+      return { min: Number(range[0]), max: Number(range[1]) };
+    }
+    return { min: fallbackMin, max: fallbackMax };
+  }
+
+  function setV2Override(key, value) {
+    if (!STATE.v2Overrides || typeof STATE.v2Overrides !== "object") STATE.v2Overrides = {};
+    if (value === null || value === undefined || value === "") {
+      delete STATE.v2Overrides[key];
+      return;
+    }
+    STATE.v2Overrides[key] = value;
+  }
+
+  function applyV2OverridesFromSource(source, keys) {
+    if (!source || typeof source !== "object") return;
+    keys.forEach((key) => {
+      if (source[key] !== undefined) setV2Override(key, source[key]);
+    });
+  }
+
+  function applyV2DefaultsToLegacySession(source) {
+    if (!source || typeof source !== "object") return;
+    const s = STATE.session;
+    s.formulaOverrides = s.formulaOverrides || {};
+    s.prefermentOptions = s.prefermentOptions || defaultState().session.prefermentOptions;
+    s.temperaturePlanning = s.temperaturePlanning || defaultState().session.temperaturePlanning;
+
+    if (Number.isFinite(Number(source.hydration_percent))) s.formulaOverrides.hydrationPct = Number(source.hydration_percent);
+    if (Number.isFinite(Number(source.salt_percent))) s.formulaOverrides.saltPct = Number(source.salt_percent);
+    if (Number.isFinite(Number(source.oil_percent))) s.formulaOverrides.oilPct = Number(source.oil_percent);
+    if (Number.isFinite(Number(source.honey_percent))) s.formulaOverrides.honeyPct = Number(source.honey_percent);
+    if (Number.isFinite(Number(source.diastatic_malt_percent))) s.formulaOverrides.maltPct = Number(source.diastatic_malt_percent);
+    if (Number.isFinite(Number(source.yeast_percent))) s.formulaOverrides.yeastPctIDY = Number(source.yeast_percent);
+    if (source.yeast_type) s.formulaOverrides.yeastType = mapV2YeastTypeToLegacy(source.yeast_type);
+
+    if (Number.isFinite(Number(source.dough_unit_weight_g))) s.ballWeightG = Number(source.dough_unit_weight_g);
+    if (Number.isFinite(Number(source.target_pizza_count))) s.ballsUsed = Math.max(1, Number(source.target_pizza_count));
+    if (source.pizza_style_id) {
+      const mappedStyle = mapV2StyleToLegacy(source.pizza_style_id);
+      if (mappedStyle) {
+        s.styleId = mappedStyle;
+        s.existingDough.styleId = mappedStyle;
+      }
+    }
+    if (source.oven_type) {
+      const mappedOven = selectOvenIdForType(source.oven_type);
+      if (mappedOven) s.oven_id = mappedOven;
+    }
+    if (s.oven_id) {
+      const selected = window.PizzaConfigLoader.getOvenById(CONFIG.ovens || [], s.oven_id);
+      if (selected?.programs?.length && (!s.oven_program_id || !selected.programs.some((p) => p.id === s.oven_program_id))) {
+        s.oven_program_id = selected.programs[0].id;
+      }
+    }
+
+    if (source.fermentation_location) {
+      const mapped = mapV2FermentationLocationToLegacy(source.fermentation_location);
+      if (mapped) s.fermentationLocation = mapped;
+    }
+
+    if (Number.isFinite(Number(source.target_fdt_c))) {
+      s.temperaturePlanning.targetDDTC = Number(source.target_fdt_c);
+    }
+
+    if (source.mix_method) {
+      const mixerId = selectMixerIdForMethod(source.mix_method);
+      if (mixerId) s.mixer_id = mixerId;
+    }
+
+    if (source.starter_enabled) {
+      s.prefermentType = "SOURDOUGH";
+      if (Number.isFinite(Number(source.starter_hydration_percent))) {
+        s.prefermentOptions.sourdough.starterHydrationPct = Number(source.starter_hydration_percent);
+      }
+      if (Number.isFinite(Number(source.starter_inoculation_percent))) {
+        s.prefermentOptions.sourdough.inoculationPctFlourBasis = Number(source.starter_inoculation_percent);
+      }
+    } else if (source.preferment_enabled) {
+      const mapped = mapV2PrefermentTypeToLegacy(source.preferment_type);
+      if (mapped) s.prefermentType = mapped;
+      if (mapped === "BIGA" && Number.isFinite(Number(source.preferment_flour_percent_of_total))) {
+        s.prefermentOptions.biga.bigaPercentTotalFlour = Number(source.preferment_flour_percent_of_total);
+      }
+      if (mapped === "BIGA" && Number.isFinite(Number(source.preferment_hydration_percent))) {
+        s.prefermentOptions.biga.bigaHydrationPct = Number(source.preferment_hydration_percent);
+      }
+      if (mapped === "TIGA" && Number.isFinite(Number(source.preferment_flour_percent_of_total))) {
+        s.prefermentOptions.tiga.tigaPercentTotalFlour = Number(source.preferment_flour_percent_of_total);
+      }
+      if (mapped === "POOLISH_BIGA_HYBRID" && Number.isFinite(Number(source.hybrid_biga_share_percent))) {
+        s.prefermentOptions.hybrid.bigaPercentOfRemainderFlour = Number(source.hybrid_biga_share_percent);
+      }
+      if (mapped === "POOLISH_BIGA_HYBRID" && Number.isFinite(Number(source.biga_hydration_percent))) {
+        s.prefermentOptions.hybrid.bigaHydrationPct = Number(source.biga_hydration_percent);
+      }
+    } else if (source.preferment_enabled === false) {
+      s.prefermentType = "NONE";
+    }
+
+    const bulkHours = Number(source.bulk_ferment_hours);
+    const coldHours = Number(source.cold_ferment_hours);
+    const ballHours = Number(source.ball_or_pan_ferment_hours);
+    if ([bulkHours, coldHours, ballHours].some((v) => Number.isFinite(v))) {
+      const total = [bulkHours, coldHours, ballHours].reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
+      s.totalFermentationHours = normalizeFermentationHours(total, s.prefermentType);
+    }
+  }
+
+  function applyV2MethodDefaults(method) {
+    if (!method) return;
+    const defaults = method.defaults || {};
+    const flags = method.flags || {};
+    STATE.session.doughMethodId = method.method_id || STATE.session.doughMethodId;
+    if (!STATE.v2Overrides || typeof STATE.v2Overrides !== "object") STATE.v2Overrides = {};
+    STATE.v2Overrides = {};
+
+    applyV2DefaultsToLegacySession(defaults);
+
+    if (method.ferment_type === "starter") {
+      STATE.session.prefermentType = "SOURDOUGH";
+    } else if (method.ferment_type === "direct") {
+      STATE.session.prefermentType = "NONE";
+    } else if (defaults.preferment_type) {
+      const mapped = mapV2PrefermentTypeToLegacy(defaults.preferment_type);
+      if (mapped) STATE.session.prefermentType = mapped;
+    }
+    applyV2OverridesFromSource(defaults, [
+      "sugar_percent",
+      "preferment_flour_percent_of_total",
+      "preferment_hydration_percent",
+      "preferment_mature_hours",
+      "hybrid_poolish_share_percent",
+      "hybrid_biga_share_percent",
+      "poolish_hydration_percent",
+      "biga_hydration_percent",
+      "starter_peak_window_hours",
+      "bulk_ferment_hours",
+      "cold_ferment_hours",
+      "ball_or_pan_ferment_hours",
+      "batching_max_dough_mass_g",
+      "ddt_model_enabled",
+      "warnings_enabled"
+    ]);
+
+    if (flags.oil_allowed === false) STATE.session.formulaOverrides.oilPct = 0;
+    if (flags.honey_allowed === false) STATE.session.formulaOverrides.honeyPct = 0;
+    if (flags.sugar_allowed === false) setV2Override("sugar_percent", 0);
+    if (flags.diastatic_malt_allowed === false) STATE.session.formulaOverrides.maltPct = 0;
+  }
+
+  function applyV2PresetOverrides(preset) {
+    if (!preset || preset.id === "manual") {
+      STATE.session.doughPresetId = "manual";
+      return;
+    }
+
+    const method = preset.method_id ? getV2MethodById(preset.method_id) : null;
+    if (method) {
+      applyV2MethodDefaults(method);
+      STATE.session.doughMethodId = method.method_id;
+    }
+
+    const overrides = preset.overrides || {};
+    applyV2DefaultsToLegacySession(overrides);
+
+    if (overrides.preferment_type) {
+      const mapped = mapV2PrefermentTypeToLegacy(overrides.preferment_type);
+      if (mapped) STATE.session.prefermentType = mapped;
+    }
+
+    applyV2OverridesFromSource(overrides, [
+      "sugar_percent",
+      "preferment_flour_percent_of_total",
+      "preferment_hydration_percent",
+      "preferment_mature_hours",
+      "hybrid_poolish_share_percent",
+      "hybrid_biga_share_percent",
+      "poolish_hydration_percent",
+      "biga_hydration_percent",
+      "starter_peak_window_hours",
+      "bulk_ferment_hours",
+      "cold_ferment_hours",
+      "ball_or_pan_ferment_hours",
+      "batching_max_dough_mass_g",
+      "ddt_model_enabled",
+      "warnings_enabled"
+    ]);
+
+    STATE.session.doughPresetId = preset.id;
+  }
+
+  function resolveV2FieldValue(key, method, preset) {
+    if (STATE.v2Overrides && STATE.v2Overrides[key] != null) return STATE.v2Overrides[key];
+    if (preset?.overrides && preset.overrides[key] != null) return preset.overrides[key];
+    if (method?.defaults && method.defaults[key] != null) return method.defaults[key];
+    return null;
+  }
+
   /* ---------- Dough totals ---------- */
   function computeDough() {
-    const plan = getPlan();
-    const totals = plan.ingredients?.totals;
-    const preferment = plan.ingredients?.preferment;
-    const finalMix = plan.ingredients?.finalMix;
+    const v2Totals = getV2DashboardTotals();
     const ordered = totalPizzasFromOrders();
     const balls = ensureMinimumBallLogic();
 
-    if (!totals) {
+    if (!v2Totals) {
+      const plan = getPlan();
+      const totals = plan.ingredients?.totals;
+      const preferment = plan.ingredients?.preferment;
+      const finalMix = plan.ingredients?.finalMix;
       return {
         ordered,
         balls,
@@ -946,15 +1241,15 @@ function getProgramTempTargets(prog) {
     return {
       ordered,
       balls,
-      totalDoughG: round(plan.totalDoughG || 0, 0),
-      flourG: round(totals.flourG || 0, 0),
-      waterG: round(totals.waterG || 0, 0),
-      saltG: round(totals.saltG || 0, 1),
-      honeyG: round(totals.honeyG || 0, 1),
-      yeastG: round(totals.yeastG || 0, 2),
-      prefermentFlourG: round(preferment?.flourG || 0, 0),
-      finalFlourG: round(finalMix?.flourG || 0, 0),
-      yeastType: totals.yeastType || "IDY",
+      totalDoughG: round(v2Totals.total_dough_g || 0, 0),
+      flourG: round(v2Totals.total_flour_g || 0, 0),
+      waterG: round(v2Totals.total_water_g || 0, 0),
+      saltG: round(v2Totals.total_salt_g || 0, 1),
+      honeyG: round(v2Totals.total_honey_g || 0, 1),
+      yeastG: round(v2Totals.total_yeast_g || 0, 2),
+      prefermentFlourG: round(v2Totals.preferment_flour_g || 0, 0),
+      finalFlourG: round(v2Totals.final_mix_flour_g || 0, 0),
+      yeastType: v2Totals.yeast_type || "IDY",
       yeastMult: 1
     };
   }
@@ -1032,8 +1327,10 @@ function normalizeFermentationHours(hours, prefermentType) {
   function updateSessionOutputs() {
     const s = STATE.session;
     const c = computeDough();
-    const plan = getPlan();
+    const v2 = getResolvedSessionV2();
+    const derived = v2.derived_session_v2 || {};
     const ballsUsed = ensureMinimumBallLogic();
+    const ddtEnabled = resolveV2FieldValue("ddt_model_enabled", activeMethod, activePreset);
     const waterRec = recommendWaterTempC();
 
     const setText = (id, value) => {
@@ -1052,8 +1349,8 @@ function normalizeFermentationHours(hours, prefermentType) {
     setText("totals-yeast", `${c.yeastG} g`);
     setText("pref-flour", `${c.prefermentFlourG} g`);
     setText("pref-final-flour", `${c.finalFlourG} g`);
-    setText("pref-pct", plan.ingredients?.preferment ? "—" : "0%");
-    setText("pref-type", plan.ingredients?.preferment?.type || "NONE");
+    setText("pref-pct", derived.preferment_flour_g ? "—" : "0%");
+    setText("pref-type", derived.preferment_type ? derived.preferment_type.toUpperCase() : "NONE");
 
     const doughModeEl = document.getElementById("dough-mode-copy");
     if (doughModeEl) doughModeEl.textContent = doughModeCopy();
@@ -1089,6 +1386,21 @@ function normalizeFermentationHours(hours, prefermentType) {
     const s = STATE.session;
     const c = computeDough();
     const plan = getPlan();
+    const v2 = getResolvedSessionV2();
+    const derived = v2.derived_session_v2 || {};
+    const v2Methods = getV2Methods();
+    const v2Presets = getV2PresetOptions();
+    const activeMethod = getV2MethodById(s.doughMethodId);
+    const activePreset = getV2PresetById(s.doughPresetId);
+    const methodFlags = activeMethod?.flags || {};
+    const methodSupports = activeMethod?.supports || {};
+    const prefermentSupported = methodSupports.preferment !== false;
+    const starterSupported = methodSupports.starter !== false;
+    const hybridSupported = methodSupports.hybrid !== false;
+    const methodNotes = Array.isArray(activeMethod?.notes_md) ? activeMethod.notes_md.join(" ") : (activeMethod?.notes || "");
+    const presetNotes = Array.isArray(activePreset?.selection_notes_md)
+      ? activePreset.selection_notes_md.join(" ")
+      : (activePreset?.description || "");
     const waterRec = recommendWaterTempC();
     const ballsUsed = ensureMinimumBallLogic();
     const ov = getSelectedOven();
@@ -1267,29 +1579,37 @@ function normalizeFermentationHours(hours, prefermentType) {
         <h3>Fermentation Plan</h3>
         <div class="grid-2">
           <div>
+            <label>Dough method</label>
+            <select id="doughMethodSelect">
+              ${v2Methods.map((method) => `
+                <option value="${method.method_id}" ${method.method_id === s.doughMethodId ? "selected" : ""}>
+                  ${escapeHtml(method.display_name || method.method_id)}
+                </option>
+              `).join("")}
+            </select>
+            <div class="small">${escapeHtml(methodNotes || "")}</div>
+          </div>
+          <div>
             <label>Preferment type</label>
             <select id="prefType">
               <option value="NONE" ${s.prefermentType === "NONE" ? "selected" : ""}>None (Direct)</option>
-              <option value="POOLISH" ${s.prefermentType === "POOLISH" ? "selected" : ""}>Poolish</option>
-              <option value="BIGA" ${s.prefermentType === "BIGA" ? "selected" : ""}>Biga</option>
-              <option value="TIGA" ${s.prefermentType === "TIGA" ? "selected" : ""}>Tiga</option>
-              <option value="POOLISH_BIGA_HYBRID" ${s.prefermentType === "POOLISH_BIGA_HYBRID" ? "selected" : ""}>Poolish + Biga Hybrid</option>
-              <option value="SOURDOUGH" ${s.prefermentType === "SOURDOUGH" ? "selected" : ""}>Sourdough</option>
+              <option value="POOLISH" ${s.prefermentType === "POOLISH" ? "selected" : ""} ${prefermentSupported ? "" : "disabled"}>Poolish</option>
+              <option value="BIGA" ${s.prefermentType === "BIGA" ? "selected" : ""} ${prefermentSupported ? "" : "disabled"}>Biga</option>
+              <option value="TIGA" ${s.prefermentType === "TIGA" ? "selected" : ""} ${prefermentSupported ? "" : "disabled"}>Tiga</option>
+              <option value="POOLISH_BIGA_HYBRID" ${s.prefermentType === "POOLISH_BIGA_HYBRID" ? "selected" : ""} ${hybridSupported ? "" : "disabled"}>Poolish + Biga Hybrid</option>
+              <option value="SOURDOUGH" ${s.prefermentType === "SOURDOUGH" ? "selected" : ""} ${starterSupported ? "" : "disabled"}>Sourdough</option>
             </select>
           </div>
           <div>
             <label>Dough preset</label>
             <select id="doughPresetSelect">
-              ${(CONFIG.doughPresets || [])
-                .map(
-                  (m) => `
-                  <option value="${m.id}" ${m.id === s.doughPresetId ? "selected" : ""}>
-                    ${escapeHtml(m.label)}
-                  </option>`
-                )
-                .join("")}
+              ${v2Presets.map((preset) => `
+                <option value="${preset.id}" ${preset.id === s.doughPresetId ? "selected" : ""}>
+                  ${escapeHtml(preset.label || preset.id)}
+                </option>
+              `).join("")}
             </select>
-            <div class="small">${escapeHtml((CONFIG.doughPresets || []).find((p) => p.id === s.doughPresetId)?.description || "")}</div>
+            <div class="small">${escapeHtml(presetNotes || "")}</div>
           </div>
           <div>
             <label>Fermentation location</label>
@@ -1331,6 +1651,16 @@ function normalizeFermentationHours(hours, prefermentType) {
             </select>
           </div>
           <div>
+            <label>Poolish % total flour</label>
+            <input type="text" id="poolishPct" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("poolishPct", resolveV2FieldValue("preferment_flour_percent_of_total", activeMethod, activePreset) ?? 30))}">
+          </div>
+          <div>
+            <label>Poolish hydration %</label>
+            <input type="text" id="poolishHydration" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("poolishHydration", resolveV2FieldValue("preferment_hydration_percent", activeMethod, activePreset) ?? 100))}">
+          </div>
+          <div>
             <label>Poolish batch override</label>
             <select id="poolishBatchOverride">
               <option value="AUTO" ${s.prefermentOptions?.poolish?.poolishBatchOverride === "AUTO" ? "selected" : ""}>Auto</option>
@@ -1360,6 +1690,11 @@ function normalizeFermentationHours(hours, prefermentType) {
             <label>Tiga % total flour</label>
             <input type="text" id="tigaPct" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("tigaPct", s.prefermentOptions?.tiga?.tigaPercentTotalFlour ?? 30))}">
           </div>
+          <div>
+            <label>Tiga hydration %</label>
+            <input type="text" id="tigaHydration" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("tigaHydration", resolveV2FieldValue("preferment_hydration_percent", activeMethod, activePreset) ?? 70))}">
+          </div>
           ` : ""}
           ${s.prefermentType === "POOLISH_BIGA_HYBRID" ? `
           <div>
@@ -1368,6 +1703,16 @@ function normalizeFermentationHours(hours, prefermentType) {
               <option value="false" ${!s.prefermentOptions?.hybrid?.honeyEnabled ? "selected" : ""}>No</option>
               <option value="true" ${s.prefermentOptions?.hybrid?.honeyEnabled ? "selected" : ""}>Yes</option>
             </select>
+          </div>
+          <div>
+            <label>Preferment % total flour</label>
+            <input type="text" id="hybridPrefPct" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("hybridPrefPct", resolveV2FieldValue("preferment_flour_percent_of_total", activeMethod, activePreset) ?? 60))}">
+          </div>
+          <div>
+            <label>Poolish hydration %</label>
+            <input type="text" id="hybridPoolishHydration" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("hybridPoolishHydration", resolveV2FieldValue("poolish_hydration_percent", activeMethod, activePreset) ?? 100))}">
           </div>
           <div>
             <label>Poolish batch override</label>
@@ -1420,6 +1765,66 @@ function normalizeFermentationHours(hours, prefermentType) {
       </div>
 
       <div class="card">
+        <h3>Method Timing & Batching</h3>
+        <div class="grid-2">
+          ${s.prefermentType !== "NONE" && s.prefermentType !== "SOURDOUGH" ? `
+          <div>
+            <label>Preferment mature hours</label>
+            <input type="text" id="prefMatureHours" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("prefMatureHours", resolveV2FieldValue("preferment_mature_hours", activeMethod, activePreset) ?? 12))}">
+          </div>
+          ` : ""}
+          ${s.prefermentType === "SOURDOUGH" ? `
+          <div>
+            <label>Starter peak window (hours)</label>
+            <input type="text" id="starterPeakHours" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("starterPeakHours", resolveV2FieldValue("starter_peak_window_hours", activeMethod, activePreset) ?? 4))}">
+          </div>
+          ` : ""}
+          <div>
+            <label>Bulk ferment hours</label>
+            <input type="text" id="bulkHours" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("bulkHours", resolveV2FieldValue("bulk_ferment_hours", activeMethod, activePreset) ?? 4))}">
+          </div>
+          <div>
+            <label>Cold ferment hours</label>
+            <input type="text" id="coldHours" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("coldHours", resolveV2FieldValue("cold_ferment_hours", activeMethod, activePreset) ?? 20))}">
+          </div>
+          <div>
+            <label>Ball/pan ferment hours</label>
+            <input type="text" id="ballHours" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("ballHours", resolveV2FieldValue("ball_or_pan_ferment_hours", activeMethod, activePreset) ?? 0))}">
+          </div>
+          <div>
+            <label>Max dough per batch (g)</label>
+            <input type="text" id="batchMax" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("batchMax", resolveV2FieldValue("batching_max_dough_mass_g", activeMethod, activePreset) ?? 3500))}">
+          </div>
+        </div>
+      </div>
+
+      ${activeMethod ? `
+      <div class="card">
+        <h3>Method Details</h3>
+        <div class="small">Supports: preferment ${activeMethod.supports?.preferment ? "yes" : "no"}, starter ${activeMethod.supports?.starter ? "yes" : "no"}, hybrid ${activeMethod.supports?.hybrid ? "yes" : "no"}.</div>
+        <div class="small">Phases: ${(activeMethod.phases || []).join(", ") || "—"}</div>
+        <div class="small">Time anchors: ${(activeMethod.time_anchors || []).join(", ") || "—"}</div>
+        <div class="small">Warnings enabled: ${resolveV2FieldValue("warnings_enabled", activeMethod, activePreset) === false ? "no" : "yes"}</div>
+      </div>
+      ` : ""}
+
+      ${activePreset && activePreset.id !== "manual" ? `
+      <div class="card">
+        <h3>Preset Details</h3>
+        <div class="small">Authority: ${escapeHtml(activePreset.authority_id || activePreset.embedded_authority?.name || "—")}</div>
+        <div class="small">Style: ${escapeHtml(activePreset.pizza_style_id || "—")}</div>
+        <div class="small">Oven type: ${escapeHtml(activePreset.oven_type || "—")}</div>
+        <div class="small">Flour blend: ${escapeHtml(activePreset.flour_blend_id || "—")}</div>
+      </div>
+      ` : ""}
+
+      <div class="card">
         <h3>Formula Overrides</h3>
         <div class="grid-2">
           <div>
@@ -1436,19 +1841,25 @@ function normalizeFermentationHours(hours, prefermentType) {
           </div>
           <div>
             <label>Oil % <span class="dirty-indicator" data-dirty-for="oil" hidden></span></label>
-            <input type="text" id="oil" inputmode="decimal" data-numeric="true"
+            <input type="text" id="oil" inputmode="decimal" data-numeric="true" ${methodFlags.oil_allowed === false ? "disabled" : ""}
               value="${escapeHtml(getInputDisplayValue("oil", Number(s.formulaOverrides?.oilPct ?? 0)))}">
             <div class="input-error" data-error-for="oil" hidden></div>
           </div>
           <div>
             <label>Honey % <span class="dirty-indicator" data-dirty-for="honey" hidden></span></label>
-            <input type="text" id="honey" inputmode="decimal" data-numeric="true"
+            <input type="text" id="honey" inputmode="decimal" data-numeric="true" ${methodFlags.honey_allowed === false ? "disabled" : ""}
               value="${escapeHtml(getInputDisplayValue("honey", Number(s.formulaOverrides?.honeyPct ?? 0)))}">
             <div class="input-error" data-error-for="honey" hidden></div>
           </div>
           <div>
+            <label>Sugar % <span class="dirty-indicator" data-dirty-for="sugarPct" hidden></span></label>
+            <input type="text" id="sugarPct" inputmode="decimal" data-numeric="true" ${methodFlags.sugar_allowed === false ? "disabled" : ""}
+              value="${escapeHtml(getInputDisplayValue("sugarPct", Number(resolveV2FieldValue("sugar_percent", activeMethod, activePreset) ?? 0)))}">
+            <div class="input-error" data-error-for="sugarPct" hidden></div>
+          </div>
+          <div>
             <label>Malt % <span class="dirty-indicator" data-dirty-for="malt" hidden></span></label>
-            <input type="text" id="malt" inputmode="decimal" data-numeric="true"
+            <input type="text" id="malt" inputmode="decimal" data-numeric="true" ${methodFlags.diastatic_malt_allowed === false ? "disabled" : ""}
               value="${escapeHtml(getInputDisplayValue("malt", Number(s.formulaOverrides?.maltPct ?? 0)))}">
             <div class="input-error" data-error-for="malt" hidden></div>
           </div>
@@ -1492,9 +1903,10 @@ function normalizeFermentationHours(hours, prefermentType) {
           </div>
           <div>
             <label>Target DDT (°C) <span class="dirty-indicator" data-dirty-for="ddtC" hidden></span></label>
-            <input type="text" id="ddtC" inputmode="decimal" data-numeric="true"
+            <input type="text" id="ddtC" inputmode="decimal" data-numeric="true" ${ddtEnabled === false ? "disabled" : ""}
               value="${escapeHtml(getInputDisplayValue("ddtC", Number(s.temperaturePlanning?.targetDDTC || 23)))}">
             <div class="input-error" data-error-for="ddtC" hidden></div>
+            ${ddtEnabled === false ? `<div class="small">DDT model disabled by method defaults.</div>` : ""}
           </div>
           <div>
             <label>Recommended water temp (°C)</label>
@@ -1567,8 +1979,8 @@ function normalizeFermentationHours(hours, prefermentType) {
             <div class="kpi">
               <div class="box"><div class="small">Preferment flour</div><div class="v" id="pref-flour">${c.prefermentFlourG} g</div></div>
               <div class="box"><div class="small">Final flour</div><div class="v" id="pref-final-flour">${c.finalFlourG} g</div></div>
-              <div class="box"><div class="small">Preferment %</div><div class="v" id="pref-pct">—</div></div>
-              <div class="box"><div class="small">Preferment type</div><div class="v" id="pref-type">${escapeHtml(plan.ingredients?.preferment?.type || "NONE")}</div></div>
+              <div class="box"><div class="small">Preferment %</div><div class="v" id="pref-pct">${derived.preferment_flour_g ? "—" : "0%"}</div></div>
+              <div class="box"><div class="small">Preferment type</div><div class="v" id="pref-type">${escapeHtml(derived.preferment_type ? derived.preferment_type.toUpperCase() : "NONE")}</div></div>
             </div>
           </div>
         ` : `
@@ -1590,6 +2002,15 @@ function normalizeFermentationHours(hours, prefermentType) {
     };
     if ($("#doughPresetSelect")) {
       $("#doughPresetSelect").onchange = (e) => applyDoughPreset(e.target.value);
+    }
+    if ($("#doughMethodSelect")) {
+      $("#doughMethodSelect").onchange = (e) => {
+        const method = getV2MethodById(e.target.value);
+        applyV2MethodDefaults(method);
+        s.doughPresetId = "manual";
+        saveState();
+        render();
+      };
     }
 
     // Oven selection
@@ -1653,7 +2074,13 @@ function normalizeFermentationHours(hours, prefermentType) {
 
     if ($("#prefType")) {
       $("#prefType").onchange = (e) => {
-        resetSessionForPrefermentType(e.target.value, { doughPresetId: "manual" });
+        const nextType = e.target.value;
+        const methodId = resolveMethodIdForPreferment(nextType, s.doughMethodId);
+        const method = getV2MethodById(methodId);
+        if (method) applyV2MethodDefaults(method);
+        s.prefermentType = nextType;
+        s.doughMethodId = methodId;
+        s.doughPresetId = "manual";
         saveState();
         render();
       };
@@ -1682,15 +2109,6 @@ function normalizeFermentationHours(hours, prefermentType) {
     if ($("#poolishCustomFlour")) {
       $("#poolishCustomFlour").onchange = (e) => { s.prefermentOptions.poolish.customPoolishFlourG = Number(e.target.value || 0) || null; saveState(); render(); };
     }
-    if ($("#bigaPct")) {
-      $("#bigaPct").onchange = (e) => { s.prefermentOptions.biga.bigaPercentTotalFlour = Number(e.target.value || 0); saveState(); render(); };
-    }
-    if ($("#bigaHydration")) {
-      $("#bigaHydration").onchange = (e) => { s.prefermentOptions.biga.bigaHydrationPct = Number(e.target.value || 0); saveState(); render(); };
-    }
-    if ($("#tigaPct")) {
-      $("#tigaPct").onchange = (e) => { s.prefermentOptions.tiga.tigaPercentTotalFlour = Number(e.target.value || 0); saveState(); render(); };
-    }
     if ($("#hybridHoney")) {
       $("#hybridHoney").onchange = (e) => { s.prefermentOptions.hybrid.honeyEnabled = e.target.value === "true"; saveState(); render(); };
     }
@@ -1700,24 +2118,28 @@ function normalizeFermentationHours(hours, prefermentType) {
     if ($("#hybridPoolishCustomFlour")) {
       $("#hybridPoolishCustomFlour").onchange = (e) => { s.prefermentOptions.hybrid.customPoolishFlourG = Number(e.target.value || 0) || null; saveState(); render(); };
     }
-    if ($("#hybridBigaPct")) {
-      $("#hybridBigaPct").onchange = (e) => { s.prefermentOptions.hybrid.bigaPercentOfRemainderFlour = Number(e.target.value || 0); saveState(); render(); };
-    }
-    if ($("#hybridBigaHydration")) {
-      $("#hybridBigaHydration").onchange = (e) => { s.prefermentOptions.hybrid.bigaHydrationPct = Number(e.target.value || 0); saveState(); render(); };
-    }
     if ($("#starterHydration")) {
       $("#starterHydration").onchange = (e) => { s.prefermentOptions.sourdough.starterHydrationPct = Number(e.target.value || 100); saveState(); render(); };
-    }
-    if ($("#starterInoculation")) {
-      $("#starterInoculation").onchange = (e) => { s.prefermentOptions.sourdough.inoculationPctFlourBasis = Number(e.target.value || 0); saveState(); render(); };
     }
     if ($("#yeastAssistToggle")) {
       $("#yeastAssistToggle").onchange = (e) => { s.prefermentOptions.sourdough.useCommercialYeastAssist = e.target.value === "true"; saveState(); render(); };
     }
-    if ($("#yeastAssistPct")) {
-      $("#yeastAssistPct").onchange = (e) => { s.prefermentOptions.sourdough.yeastAssistPctIDY = Number(e.target.value || 0); saveState(); render(); };
-    }
+
+    const hydrationRange = getMethodRange(activeMethod, "hydration_percent", 50, 90);
+    const saltRange = getMethodRange(activeMethod, "salt_percent", 1.5, 4);
+    const oilRange = getMethodRange(activeMethod, "oil_percent", 0, 10);
+    const honeyRange = getMethodRange(activeMethod, "honey_percent", 0, 5);
+    const maltRange = getMethodRange(activeMethod, "diastatic_malt_percent", 0, 3);
+    const yeastRange = getMethodRange(activeMethod, "yeast_percent", 0, 3);
+    const sugarRange = getMethodRange(activeMethod, "sugar_percent", 0, 5);
+    const prefFlourRange = getMethodRange(activeMethod, "preferment_flour_percent_of_total", 0, 100);
+    const prefHydrationRange = getMethodRange(activeMethod, "preferment_hydration_percent", 40, 120);
+    const poolishHydrationRange = getMethodRange(activeMethod, "poolish_hydration_percent", 90, 120);
+    const bigaHydrationRange = getMethodRange(activeMethod, "biga_hydration_percent", 40, 60);
+    const hybridShareRange = getMethodRange(activeMethod, "hybrid_biga_share_percent", 0, 100);
+    const prefermentHoursRange = getMethodRange(activeMethod, "preferment_mature_hours", 6, 24);
+    const starterPeakRange = getMethodRange(activeMethod, "starter_peak_window_hours", 2, 8);
+    const starterInocRange = getMethodRange(activeMethod, "starter_inoculation_percent", 5, 40);
 
     bindNumericInput($("#ballWeight"), {
       key: "ballWeight",
@@ -1738,54 +2160,208 @@ function normalizeFermentationHours(hours, prefermentType) {
     bindNumericInput($("#hydration"), {
       key: "hydration",
       getValue: () => Number(s.formulaOverrides?.hydrationPct || 63),
-      setValue: (value) => { s.formulaOverrides.hydrationPct = clamp(value, 50, 90); },
-      min: 50,
-      max: 90,
+      setValue: (value) => { s.formulaOverrides.hydrationPct = clamp(value, hydrationRange.min, hydrationRange.max); },
+      min: hydrationRange.min,
+      max: hydrationRange.max,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#salt"), {
       key: "salt",
       getValue: () => Number(s.formulaOverrides?.saltPct || 2.8),
-      setValue: (value) => { s.formulaOverrides.saltPct = clamp(value, 1.5, 4); },
-      min: 1.5,
-      max: 4,
+      setValue: (value) => { s.formulaOverrides.saltPct = clamp(value, saltRange.min, saltRange.max); },
+      min: saltRange.min,
+      max: saltRange.max,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#oil"), {
       key: "oil",
       getValue: () => Number(s.formulaOverrides?.oilPct || 0),
-      setValue: (value) => { s.formulaOverrides.oilPct = clamp(value, 0, 10); },
-      min: 0,
-      max: 10,
+      setValue: (value) => { s.formulaOverrides.oilPct = clamp(value, oilRange.min, oilRange.max); },
+      min: oilRange.min,
+      max: oilRange.max,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#honey"), {
       key: "honey",
       getValue: () => Number(s.formulaOverrides?.honeyPct || 0),
-      setValue: (value) => { s.formulaOverrides.honeyPct = clamp(value, 0, 5); },
-      min: 0,
-      max: 5,
+      setValue: (value) => { s.formulaOverrides.honeyPct = clamp(value, honeyRange.min, honeyRange.max); },
+      min: honeyRange.min,
+      max: honeyRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#sugarPct"), {
+      key: "sugarPct",
+      getValue: () => Number(resolveV2FieldValue("sugar_percent", activeMethod, activePreset) ?? 0),
+      setValue: (value) => { setV2Override("sugar_percent", clamp(value, sugarRange.min, sugarRange.max)); },
+      min: sugarRange.min,
+      max: sugarRange.max,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#malt"), {
       key: "malt",
       getValue: () => Number(s.formulaOverrides?.maltPct || 0),
-      setValue: (value) => { s.formulaOverrides.maltPct = clamp(value, 0, 3); },
-      min: 0,
-      max: 3,
+      setValue: (value) => { s.formulaOverrides.maltPct = clamp(value, maltRange.min, maltRange.max); },
+      min: maltRange.min,
+      max: maltRange.max,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#yeastPct"), {
       key: "yeastPct",
       getValue: () => Number(s.formulaOverrides?.yeastPctIDY || 0.05),
-      setValue: (value) => { s.formulaOverrides.yeastPctIDY = clamp(value, 0, 3); },
-      min: 0,
-      max: 3,
+      setValue: (value) => { s.formulaOverrides.yeastPctIDY = clamp(value, yeastRange.min, yeastRange.max); },
+      min: yeastRange.min,
+      max: yeastRange.max,
       onCommit: updateSessionOutputs
     });
     if ($("#yeastType")) {
       $("#yeastType").onchange = (e) => { s.formulaOverrides.yeastType = e.target.value; saveState(); render(); };
     }
+
+    bindNumericInput($("#poolishPct"), {
+      key: "poolishPct",
+      getValue: () => Number(resolveV2FieldValue("preferment_flour_percent_of_total", activeMethod, activePreset) ?? 30),
+      setValue: (value) => { setV2Override("preferment_flour_percent_of_total", clamp(value, prefFlourRange.min, prefFlourRange.max)); },
+      min: prefFlourRange.min,
+      max: prefFlourRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#poolishHydration"), {
+      key: "poolishHydration",
+      getValue: () => Number(resolveV2FieldValue("preferment_hydration_percent", activeMethod, activePreset) ?? 100),
+      setValue: (value) => { setV2Override("preferment_hydration_percent", clamp(value, prefHydrationRange.min, prefHydrationRange.max)); },
+      min: prefHydrationRange.min,
+      max: prefHydrationRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#tigaHydration"), {
+      key: "tigaHydration",
+      getValue: () => Number(resolveV2FieldValue("preferment_hydration_percent", activeMethod, activePreset) ?? 70),
+      setValue: (value) => { setV2Override("preferment_hydration_percent", clamp(value, prefHydrationRange.min, prefHydrationRange.max)); },
+      min: prefHydrationRange.min,
+      max: prefHydrationRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#hybridPrefPct"), {
+      key: "hybridPrefPct",
+      getValue: () => Number(resolveV2FieldValue("preferment_flour_percent_of_total", activeMethod, activePreset) ?? 60),
+      setValue: (value) => { setV2Override("preferment_flour_percent_of_total", clamp(value, prefFlourRange.min, prefFlourRange.max)); },
+      min: prefFlourRange.min,
+      max: prefFlourRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#hybridPoolishHydration"), {
+      key: "hybridPoolishHydration",
+      getValue: () => Number(resolveV2FieldValue("poolish_hydration_percent", activeMethod, activePreset) ?? 100),
+      setValue: (value) => { setV2Override("poolish_hydration_percent", clamp(value, poolishHydrationRange.min, poolishHydrationRange.max)); },
+      min: poolishHydrationRange.min,
+      max: poolishHydrationRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#prefMatureHours"), {
+      key: "prefMatureHours",
+      getValue: () => Number(resolveV2FieldValue("preferment_mature_hours", activeMethod, activePreset) ?? 12),
+      setValue: (value) => { setV2Override("preferment_mature_hours", clamp(value, prefermentHoursRange.min, prefermentHoursRange.max)); },
+      min: prefermentHoursRange.min,
+      max: prefermentHoursRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#starterPeakHours"), {
+      key: "starterPeakHours",
+      getValue: () => Number(resolveV2FieldValue("starter_peak_window_hours", activeMethod, activePreset) ?? 4),
+      setValue: (value) => { setV2Override("starter_peak_window_hours", clamp(value, starterPeakRange.min, starterPeakRange.max)); },
+      min: starterPeakRange.min,
+      max: starterPeakRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#bulkHours"), {
+      key: "bulkHours",
+      getValue: () => Number(resolveV2FieldValue("bulk_ferment_hours", activeMethod, activePreset) ?? 4),
+      setValue: (value) => { setV2Override("bulk_ferment_hours", Math.max(0, value)); },
+      min: 0,
+      max: 96,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#coldHours"), {
+      key: "coldHours",
+      getValue: () => Number(resolveV2FieldValue("cold_ferment_hours", activeMethod, activePreset) ?? 20),
+      setValue: (value) => { setV2Override("cold_ferment_hours", Math.max(0, value)); },
+      min: 0,
+      max: 96,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#ballHours"), {
+      key: "ballHours",
+      getValue: () => Number(resolveV2FieldValue("ball_or_pan_ferment_hours", activeMethod, activePreset) ?? 0),
+      setValue: (value) => { setV2Override("ball_or_pan_ferment_hours", Math.max(0, value)); },
+      min: 0,
+      max: 48,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#batchMax"), {
+      key: "batchMax",
+      getValue: () => Number(resolveV2FieldValue("batching_max_dough_mass_g", activeMethod, activePreset) ?? 3500),
+      setValue: (value) => { setV2Override("batching_max_dough_mass_g", Math.max(0, value)); },
+      min: 0,
+      max: 20000,
+      onCommit: updateSessionOutputs
+    });
+
+    bindNumericInput($("#bigaPct"), {
+      key: "bigaPct",
+      getValue: () => Number(s.prefermentOptions?.biga?.bigaPercentTotalFlour ?? 30),
+      setValue: (value) => { s.prefermentOptions.biga.bigaPercentTotalFlour = clamp(value, prefFlourRange.min, prefFlourRange.max); },
+      min: prefFlourRange.min,
+      max: prefFlourRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#bigaHydration"), {
+      key: "bigaHydration",
+      getValue: () => Number(s.prefermentOptions?.biga?.bigaHydrationPct ?? 55),
+      setValue: (value) => { s.prefermentOptions.biga.bigaHydrationPct = clamp(value, bigaHydrationRange.min, bigaHydrationRange.max); },
+      min: bigaHydrationRange.min,
+      max: bigaHydrationRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#tigaPct"), {
+      key: "tigaPct",
+      getValue: () => Number(s.prefermentOptions?.tiga?.tigaPercentTotalFlour ?? 30),
+      setValue: (value) => { s.prefermentOptions.tiga.tigaPercentTotalFlour = clamp(value, prefFlourRange.min, prefFlourRange.max); },
+      min: prefFlourRange.min,
+      max: prefFlourRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#hybridBigaPct"), {
+      key: "hybridBigaPct",
+      getValue: () => Number(s.prefermentOptions?.hybrid?.bigaPercentOfRemainderFlour ?? 30),
+      setValue: (value) => { s.prefermentOptions.hybrid.bigaPercentOfRemainderFlour = clamp(value, hybridShareRange.min, hybridShareRange.max); },
+      min: hybridShareRange.min,
+      max: hybridShareRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#hybridBigaHydration"), {
+      key: "hybridBigaHydration",
+      getValue: () => Number(s.prefermentOptions?.hybrid?.bigaHydrationPct ?? 55),
+      setValue: (value) => { s.prefermentOptions.hybrid.bigaHydrationPct = clamp(value, bigaHydrationRange.min, bigaHydrationRange.max); },
+      min: bigaHydrationRange.min,
+      max: bigaHydrationRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#starterInoculation"), {
+      key: "starterInoculation",
+      getValue: () => Number(s.prefermentOptions?.sourdough?.inoculationPctFlourBasis ?? 20),
+      setValue: (value) => { s.prefermentOptions.sourdough.inoculationPctFlourBasis = clamp(value, starterInocRange.min, starterInocRange.max); },
+      min: starterInocRange.min,
+      max: starterInocRange.max,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#yeastAssistPct"), {
+      key: "yeastAssistPct",
+      getValue: () => Number(s.prefermentOptions?.sourdough?.yeastAssistPctIDY ?? 0.02),
+      setValue: (value) => { s.prefermentOptions.sourdough.yeastAssistPctIDY = Math.max(0, value); },
+      min: 0,
+      max: 1,
+      onCommit: updateSessionOutputs
+    });
 
     bindNumericInput($("#roomC"), {
       key: "roomC",
@@ -2283,7 +2859,8 @@ function getCanonicalInputsState() {
   return {
     session: deepClone(STATE.session || {}),
     orders: deepClone(STATE.orders || []),
-    making: deepClone(STATE.making || {})
+    making: deepClone(STATE.making || {}),
+    v2Overrides: deepClone(STATE.v2Overrides || {})
   };
 }
 
@@ -3841,6 +4418,36 @@ function renderMaking() {
       await loadToppings();
     } catch (err) {
       console.error("Toppings load failed:", err);
+    }
+
+    if (window.SessionResolverV2) {
+      try {
+        await window.SessionResolverV2.loadDoughMethods();
+        await window.SessionResolverV2.loadDoughPresets();
+        await window.SessionResolverV2.loadCustomPresets();
+      } catch (err) {
+        console.error("Session resolver v2 load failed:", err);
+      }
+
+      window.SessionResolverV2.setCatalogs({
+        ovens: CONFIG.ovens || [],
+        mixers: CONFIG.mixers || []
+      });
+
+      const methods = window.SessionResolverV2.getMethods ? window.SessionResolverV2.getMethods() : [];
+      const presets = window.SessionResolverV2.getPresets ? window.SessionResolverV2.getPresets() : [];
+      if (STATE.session) {
+        if (!methods.some((m) => m.method_id === STATE.session.doughMethodId) && methods.length) {
+          STATE.session.doughMethodId = methods[0].method_id;
+        }
+        if (!presets.some((p) => p.id === STATE.session.doughPresetId)) {
+          STATE.session.doughPresetId = "manual";
+        }
+      }
+    }
+
+    if (DEV) {
+      console.assert(Array.isArray(CONFIG.ovens) && CONFIG.ovens.length > 0, "Ovens list should be populated.");
     }
 
     saveState();
