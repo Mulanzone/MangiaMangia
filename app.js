@@ -161,6 +161,36 @@
     }
   };
 
+  function getDefaultPlannedEatISO() {
+    const now = new Date();
+    const local = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      18,
+      30,
+      0,
+      0
+    );
+    return local.toISOString();
+  }
+
+  function isoToLocalInput(isoString) {
+    if (!isoString) return "";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "";
+    const offset = date.getTimezoneOffset();
+    const local = new Date(date.getTime() - offset * 60 * 1000);
+    return local.toISOString().slice(0, 16);
+  }
+
+  function localInputToISO(localString) {
+    if (!localString) return "";
+    const date = new Date(localString);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toISOString();
+  }
+
   function setBanner(kind, title, msg) {
     const host = $("#appBanner");
     if (!host) return;
@@ -175,14 +205,9 @@ const CONFIG = {
   mixers: null,
   doughMethods: null,
   ovens: null,
-  doughPresets: [] // array of preset JSON objects
+  doughPresets: [], // array of preset JSON objects
+  toppings: []
 };
-async function loadDoughMethodPresets() {
-  const res = await fetch("./data/dough_method_presets.json");
-  if (!res.ok) throw new Error("Failed to load dough method presets");
-  const json = await res.json();
-  return json.presets;
-}
 
 
 
@@ -194,15 +219,20 @@ async function loadDoughMethodPresets() {
   // ---------- Config paths (served by your web server) ----------
   const CONFIG_PATHS = {
     doughPresets: "data/dough_presets.json",
+    doughMethods: "data/dough_methods.json",
+    toppings: "data/toppings.seed.json",
     mixers: "data/mixers.json",
     ovens: "data/ovens.json"
   };
 
   // ---------- Runtime-loaded config ----------
   // IMPORTANT: make this `let` so we can overwrite it after fetch.
-  let BASE_DOUGH_METHODS = [
+  let BASE_DOUGH_PRESETS = [
     // Fallback so the app still works if the JSON fails to load.
     { id: "manual", label: "Custom / Manual", description: "You control every parameter.", defaults: null }
+  ];
+  let BASE_DOUGH_METHODS = [
+    { id: "direct", label: "Direct Dough", category: "direct", supports: {}, phases: [], notes: "" }
   ];
 
   async function fetchJson(path) {
@@ -212,59 +242,73 @@ async function loadDoughMethodPresets() {
   }
 
   async function loadDoughPresets() {
-    // Expected file format: { "presets": [ ... ] }
-    const json = await fetchJson(CONFIG_PATHS.doughPresets);
+    const presets = await window.PizzaConfigLoader.loadDoughPresets({
+      path: CONFIG_PATHS.doughPresets,
+      fallback: BASE_DOUGH_PRESETS
+    });
 
-    if (!json || !Array.isArray(json.presets)) {
-      throw new Error("Invalid dough_presets.json: expected { presets: [] }");
-    }
+    CONFIG.doughPresets = presets;
 
-    // Light validation to avoid breaking rendering
-    const cleaned = json.presets
-      .filter(p => p && p.id && p.label)
-      .map(p => ({
-        id: String(p.id),
-        label: String(p.label),
-        description: String(p.description || ""),
-        defaults: p.defaults ?? null
-      }));
-
-    if (cleaned.length === 0) {
-      throw new Error("dough_presets.json presets[] is empty after validation");
-    }
-
-    BASE_DOUGH_METHODS = cleaned;
-
-    // If current selection no longer exists, pick first preset
-    if (!BASE_DOUGH_METHODS.some(m => m.id === STATE?.dough?.methodId)) {
-      STATE.dough.methodId = BASE_DOUGH_METHODS[0].id;
+    if (!CONFIG.doughPresets.some((m) => m.id === STATE?.session?.doughPresetId)) {
+      if (!STATE.session) STATE.session = defaultState().session;
+      STATE.session.doughPresetId = CONFIG.doughPresets[0]?.id || "manual";
     }
   }
+
+  async function loadDoughMethods() {
+    const methods = await window.PizzaConfigLoader.loadDoughMethods({
+      path: CONFIG_PATHS.doughMethods,
+      fallback: BASE_DOUGH_METHODS
+    });
+
+    CONFIG.doughMethods = methods;
+
+    if (!CONFIG.doughMethods.some((m) => m.id === STATE?.session?.doughMethodId)) {
+      if (!STATE.session) STATE.session = defaultState().session;
+      STATE.session.doughMethodId = CONFIG.doughMethods[0]?.id || "direct";
+    }
+  }
+
   async function loadMixers() {
-  const mixers = await window.PizzaConfigLoader.loadMixers({
-    path: CONFIG_PATHS.mixers,
-    fallback: BASE_MIXERS
-  });
+    const mixers = await window.PizzaConfigLoader.loadMixers({
+      path: CONFIG_PATHS.mixers,
+      fallback: BASE_MIXERS
+    });
 
-  // store it somewhere safe; pick one pattern and stick to it
-  STATE.mixers = mixers;
+    CONFIG.mixers = mixers;
 
-  // set a default selection if you plan to use it later
-  if (!STATE.mixerId && mixers.length) STATE.mixerId = mixers[0].id;
-}
-async function loadOvens() {
-  const ovens = await window.PizzaConfigLoader.loadOvens({
-    path: CONFIG_PATHS.ovens,
-    fallback: BASE_OVENS_RAW
-  });
-
-  STATE.ovens = ovens;
-
-  if (!STATE.ovenId && ovens.length) STATE.ovenId = ovens[0].id;
-  if (STATE.ovenId && !ovens.some(o => o.id === STATE.ovenId)) {
-    STATE.ovenId = ovens.length ? ovens[0].id : null;
+    if (!STATE.session) STATE.session = defaultState().session;
+    if (!STATE.session.mixer_id && mixers.length) STATE.session.mixer_id = mixers[0].id;
   }
-}
+
+  async function loadOvens() {
+    const ovens = await window.PizzaConfigLoader.loadOvens({
+      path: CONFIG_PATHS.ovens,
+      fallback: BASE_OVENS_RAW
+    });
+
+    CONFIG.ovens = ovens;
+
+    if (!STATE.session) STATE.session = defaultState().session;
+    if (!STATE.session.oven_id && ovens.length) STATE.session.oven_id = ovens[0].id;
+    if (STATE.session.oven_id && !ovens.some((o) => o.id === STATE.session.oven_id)) {
+      STATE.session.oven_id = ovens.length ? ovens[0].id : null;
+    }
+    if (STATE.session.oven_id) {
+      const selected = window.PizzaConfigLoader.getOvenById(ovens, STATE.session.oven_id);
+      if (selected?.programs?.length && !STATE.session.oven_program_id) {
+        STATE.session.oven_program_id = selected.programs[0].id;
+      }
+    }
+  }
+
+  async function loadToppings() {
+    const toppings = await window.PizzaConfigLoader.loadToppings({
+      path: CONFIG_PATHS.toppings,
+      fallback: []
+    });
+    CONFIG.toppings = toppings;
+  }
 
 
   /* ---------- Hard Requirements ---------- */
@@ -357,33 +401,63 @@ const BASE_OVENS_RAW = [
         counterC: null
       }
 },
-
-    dough: {
-      methodId: "iacopelli_balanced",
-
-      bakeEnvironment: "wfo",         // wfo | breville
-      mixingMethod: "hand",           // hand | halo
-      yeastType: "idy",               // idy | ady | fresh
-      yeastPct: 0.05,
-      fermentationLocation: "cold",   // room | cold | hybrid | double
-      fermentationHours: 24,
-
-      prefermentType: "direct",       // direct | poolish | biga | sourdough
-      prefermentPct: 0,               // flour % pre-fermented 0..100
-
-      hydrationPct: 63,
-      saltPct: 2.8,
-      honeyPct: 0.5,
-
+    session: {
+      schemaVersion: "1.0",
+      sessionId: cryptoSafeId("session"),
+      plannedEatTimeISO: "",
+      timezone: "America/Toronto",
+      doughModality: "MAKE_DOUGH",
+      styleId: "ROUND_NEAPOLITAN",
+      ballsUsed: MIN_BALLS,
       ballWeightG: 260,
-
-      temps: {
-        roomC: 22,
-        flourC: 22,
-        targetDDTC: 23
+      oven_id: null,
+      oven_program_id: null,
+      oven_overrides: {
+        enabled: false,
+        deck_temp_f: null,
+        top_temp_f: null,
+        air_temp_f: null,
+        bake_time_seconds: null,
+        broiler_mode: "AUTO"
       },
-
-      plannedEat: "" // set in normalizeState
+      mixer_id: null,
+      fermentationLocation: "ROOM",
+      fermentationMode: "SINGLE",
+      totalFermentationHours: 24,
+      temps: {
+        roomTempC: 22,
+        flourTempC: 22,
+        fridgeTempC: 4
+      },
+      prefermentType: "NONE",
+      prefermentOptions: {
+        poolish: { honeyEnabled: false, poolishBatchOverride: "AUTO", customPoolishFlourG: null },
+        biga: { bigaPercentTotalFlour: 30, bigaHydrationPct: 55 },
+        tiga: { tigaPercentTotalFlour: 30 },
+        hybrid: { honeyEnabled: false, poolishBatchOverride: "AUTO", customPoolishFlourG: null, bigaPercentOfRemainderFlour: 30, bigaHydrationPct: 55 },
+        sourdough: { starterHydrationPct: 100, inoculationPctFlourBasis: 20, useCommercialYeastAssist: false, yeastAssistPctIDY: 0.02 }
+      },
+      formulaOverrides: {
+        hydrationPct: 63,
+        saltPct: 2.8,
+        oilPct: 0,
+        honeyPct: 0.5,
+        maltPct: 0,
+        yeastPctIDY: 0.05,
+        yeastType: "IDY"
+      },
+      temperaturePlanning: { targetDDTC: 23 },
+      existingDough: {
+        source: "FROZEN",
+        frozenState: "HARD_FROZEN",
+        packaging: "BAG",
+        thawLocation: "FRIDGE",
+        styleId: "ROUND_NEAPOLITAN",
+        ballsUsed: MIN_BALLS,
+        ballWeightG: 260
+      },
+      doughMethodId: "direct",
+      doughPresetId: "manual"
     },
 
     orders: []
@@ -420,49 +494,94 @@ const BASE_OVENS_RAW = [
 
   function normalizeState() {
     if (!STATE || typeof STATE !== "object") STATE = defaultState();
-    if (!STATE.ovenId && (STATE.ovens?.length)) STATE.ovenId = STATE.ovens[0].id;
-  if (!STATE.ovenId && (STATE.ovens?.length)) STATE.ovenId = STATE.ovens[0].id;
-if (!STATE.making) STATE.making = { measured: { roomC:null, flourC:null, waterC:null, doughC:null, counterC:null } };
-if (!STATE.making.measured) STATE.making.measured = { roomC:null, flourC:null, waterC:null, doughC:null, counterC:null };
-if (STATE.dough && (STATE.dough.yeastPct == null || Number.isNaN(Number(STATE.dough.yeastPct)))) {
-  STATE.dough.yeastPct = 0.05;
-}
-
-// ovenProgramId will be corrected after ovens load, but keep it sane:
-if (STATE.ovenProgramId != null && typeof STATE.ovenProgramId !== "string") {
-  STATE.ovenProgramId = String(STATE.ovenProgramId);
-}
+    if (!STATE.making) STATE.making = { measured: { roomC: null, flourC: null, waterC: null, doughC: null, counterC: null } };
+    if (!STATE.making.measured) STATE.making.measured = { roomC: null, flourC: null, waterC: null, doughC: null, counterC: null };
 
     if (typeof STATE.debugMode !== "boolean") STATE.debugMode = false;
     if (!STATE.activeTab) STATE.activeTab = "session";
     if (!STATE.debugMode && STATE.activeTab === "debug") STATE.activeTab = "session";
-    if (!STATE.dough) STATE.dough = defaultState().dough;
     if (!Array.isArray(STATE.orders)) STATE.orders = [];
-    // Backward compatibility: map old bakeEnvironment to new ovenId (if ovenId not set)
-  if (!STATE.ovenId) {
-  if (STATE.dough?.bakeEnvironment === "breville") STATE.ovenId = "breville_pizzaiolo_bpz820";
-  else if (STATE.dough?.bakeEnvironment === "wfo") STATE.ovenId = "wfo_volta_120";
-}
 
-// If ovenId is invalid (after config load), it will get corrected by loadOvens().
+    if (!STATE.session || typeof STATE.session !== "object") {
+      const legacy = STATE.dough || {};
+      const legacyTemps = legacy.temps || {};
+      const legacyPrefermentType = legacy.prefermentType || "direct";
+      const plannedISO = legacy.plannedEat ? localInputToISO(legacy.plannedEat) : getDefaultPlannedEatISO();
 
-    // plannedEat default: +6 hours, rounded to hour
-    if (!STATE.dough.plannedEat) {
-      const d = new Date();
-      d.setHours(d.getHours() + 6);
-      d.setMinutes(0, 0, 0);
-      STATE.dough.plannedEat = d.toISOString().slice(0, 16); // datetime-local
+      STATE.session = {
+        ...defaultState().session,
+        sessionId: STATE.sessionId || cryptoSafeId("session"),
+        plannedEatTimeISO: plannedISO,
+        doughModality: "MAKE_DOUGH",
+        styleId: "ROUND_NEAPOLITAN",
+        ballsUsed: Math.max(MIN_BALLS, totalPizzasFromOrders()),
+        ballWeightG: Number(legacy.ballWeightG || 260),
+        oven_id: STATE.ovenId || null,
+        oven_program_id: STATE.ovenProgramId || null,
+        mixer_id: STATE.mixerId || null,
+        fermentationLocation: legacy.fermentationLocation === "cold" ? "FRIDGE" : legacy.fermentationLocation === "hybrid" ? "HYBRID" : "ROOM",
+        fermentationMode: legacy.fermentationLocation === "double" ? "DOUBLE" : "SINGLE",
+        totalFermentationHours: normalizeFermentationHours(legacy.fermentationHours, legacyPrefermentType),
+        temps: {
+          roomTempC: Number(legacyTemps.roomC ?? 22),
+          flourTempC: Number(legacyTemps.flourC ?? 22),
+          fridgeTempC: 4
+        },
+        prefermentType: legacyPrefermentType === "direct" ? "NONE" : legacyPrefermentType.toUpperCase(),
+        formulaOverrides: {
+          hydrationPct: Number(legacy.hydrationPct ?? 63),
+          saltPct: Number(legacy.saltPct ?? 2.8),
+          honeyPct: Number(legacy.honeyPct ?? 0),
+          oilPct: 0,
+          maltPct: 0,
+          yeastPctIDY: Number(legacy.yeastPct ?? 0.05),
+          yeastType: String(legacy.yeastType || "IDY").toUpperCase()
+        },
+        temperaturePlanning: { targetDDTC: Number(legacyTemps.targetDDTC ?? 23) }
+      };
     }
 
-    // sane defaults
-    if (!STATE.dough.ballWeightG) STATE.dough.ballWeightG = 260;
-    if (!STATE.dough.temps) STATE.dough.temps = { roomC: 22, flourC: 22, targetDDTC: 23 };
-    if (STATE.dough.prefermentType !== "direct" && !isFinite(Number(STATE.dough.prefermentPct))) STATE.dough.prefermentPct = 30;
-    if (!isFinite(Number(STATE.dough.fermentationHours))) STATE.dough.fermentationHours = 24;
-    STATE.dough.fermentationHours = normalizeFermentationHours(
-      STATE.dough.fermentationHours,
-      STATE.dough.prefermentType
-    );
+    const sessionDefaults = defaultState().session;
+    STATE.session = {
+      ...sessionDefaults,
+      ...STATE.session,
+      temps: { ...sessionDefaults.temps, ...STATE.session.temps },
+      oven_overrides: { ...sessionDefaults.oven_overrides, ...STATE.session.oven_overrides },
+      prefermentOptions: {
+        ...sessionDefaults.prefermentOptions,
+        ...STATE.session.prefermentOptions,
+        poolish: { ...sessionDefaults.prefermentOptions.poolish, ...STATE.session.prefermentOptions?.poolish },
+        biga: { ...sessionDefaults.prefermentOptions.biga, ...STATE.session.prefermentOptions?.biga },
+        tiga: { ...sessionDefaults.prefermentOptions.tiga, ...STATE.session.prefermentOptions?.tiga },
+        hybrid: { ...sessionDefaults.prefermentOptions.hybrid, ...STATE.session.prefermentOptions?.hybrid },
+        sourdough: { ...sessionDefaults.prefermentOptions.sourdough, ...STATE.session.prefermentOptions?.sourdough }
+      },
+      formulaOverrides: { ...sessionDefaults.formulaOverrides, ...STATE.session.formulaOverrides },
+      temperaturePlanning: { ...sessionDefaults.temperaturePlanning, ...STATE.session.temperaturePlanning },
+      existingDough: { ...sessionDefaults.existingDough, ...STATE.session.existingDough }
+    };
+
+    if (!STATE.session.plannedEatTimeISO) STATE.session.plannedEatTimeISO = getDefaultPlannedEatISO();
+    if (!STATE.session.sessionId) STATE.session.sessionId = cryptoSafeId("session");
+    if (!STATE.session.timezone) STATE.session.timezone = "America/Toronto";
+
+    const fermOptions = [0, 24, 48];
+    if (!fermOptions.includes(Number(STATE.session.totalFermentationHours))) {
+      STATE.session.totalFermentationHours = 24;
+    }
+
+    if (STATE.session.styleId === "PAN_SICILIAN_STANDARD") {
+      STATE.session.ballsUsed = 1;
+    }
+
+    STATE.session.existingDough = STATE.session.existingDough || defaultState().session.existingDough;
+    STATE.session.existingDough.styleId = STATE.session.styleId;
+    delete STATE.dough;
+    delete STATE.ovenId;
+    delete STATE.ovenProgramId;
+    delete STATE.mixerId;
+    delete STATE.ovens;
+    delete STATE.mixers;
 
     // normalize orders
     for (const person of STATE.orders) {
@@ -558,45 +677,58 @@ if (STATE.ovenProgramId != null && typeof STATE.ovenProgramId !== "string") {
 
   /* ---------- Yeast Multipliers (IDY baseline) ---------- */
   function yeastMultiplier(yeastType) {
-    if (yeastType === "ady") return 3;
-    if (yeastType === "fresh") return 9;
+    const key = String(yeastType || "").toUpperCase();
+    if (key === "ADY") return 3;
+    if (key === "FRESH") return 9;
     return 1;
   }
 
   function yeastTypeLabel(yeastType) {
-    if (yeastType === "ady") return "Active Dry";
-    if (yeastType === "fresh") return "Fresh";
+    const key = String(yeastType || "").toUpperCase();
+    if (key === "ADY") return "Active Dry";
+    if (key === "FRESH") return "Fresh";
     return "Instant Dry";
   }
 
   /* ---------- Dough method apply ---------- */
   function getMethod(id) {
-    return BASE_DOUGH_METHODS.find((m) => m.id === id) || BASE_DOUGH_METHODS[0];
+    return (CONFIG.doughMethods || []).find((m) => m.id === id) || (CONFIG.doughMethods || [])[0];
   }
-function getOvenById(id) {
-  return (STATE.ovens || []).find(o => o.id === id) || null;
-}
 
-  function applyDoughMethod(methodId) {
-    const method = getMethod(methodId);
-    STATE.dough.methodId = methodId;
+  function getOvenById(id) {
+    return window.PizzaConfigLoader.getOvenById(CONFIG.ovens || [], id);
+  }
 
-    if (methodId === "manual" || !method.defaults) {
+  function applyDoughPreset(presetId) {
+    const preset = (CONFIG.doughPresets || []).find((p) => p.id === presetId) || null;
+    if (!STATE.session) STATE.session = defaultState().session;
+    STATE.session.doughPresetId = presetId;
+
+    if (!preset || presetId === "manual" || !preset.defaults) {
       saveState();
       render();
       return;
     }
 
-    const def = method.defaults;
-    STATE.dough.hydrationPct = def.hydrationPct;
-    STATE.dough.saltPct = def.saltPct;
-    STATE.dough.honeyPct = def.honeyPct;
-    if (def.yeastPct != null) STATE.dough.yeastPct = def.yeastPct;
-    STATE.dough.prefermentType = def.prefermentType;
-    STATE.dough.prefermentPct = def.prefermentPct;
-    STATE.dough.fermentationHours = normalizeFermentationHours(def.fermentationHours, def.prefermentType);
-    STATE.dough.fermentationLocation = def.fermentationLocation;
-    STATE.dough.temps.targetDDTC = def.ddtC;
+    const def = preset.defaults;
+    STATE.session.formulaOverrides = {
+      ...STATE.session.formulaOverrides,
+      hydrationPct: Number(def.hydrationPct ?? STATE.session.formulaOverrides?.hydrationPct ?? 63),
+      saltPct: Number(def.saltPct ?? STATE.session.formulaOverrides?.saltPct ?? 2.8),
+      honeyPct: Number(def.honeyPct ?? STATE.session.formulaOverrides?.honeyPct ?? 0),
+      yeastPctIDY: Number(def.yeastPct ?? STATE.session.formulaOverrides?.yeastPctIDY ?? 0.05)
+    };
+
+    const prefType = String(def.prefermentType || "direct");
+    STATE.session.prefermentType = prefType === "direct" ? "NONE" : prefType.toUpperCase();
+    STATE.session.totalFermentationHours = normalizeFermentationHours(def.fermentationHours, prefType);
+    STATE.session.fermentationLocation =
+      def.fermentationLocation === "cold" ? "FRIDGE" :
+      def.fermentationLocation === "hybrid" ? "HYBRID" :
+      "ROOM";
+    STATE.session.temperaturePlanning = {
+      targetDDTC: Number(def.ddtC ?? STATE.session.temperaturePlanning?.targetDDTC ?? 23)
+    };
 
     saveState();
     render();
@@ -612,7 +744,14 @@ function getOvenById(id) {
   }
 
   function ensureMinimumBallLogic() {
-    return Math.max(MIN_BALLS, totalPizzasFromOrders());
+    const minBalls = Math.max(MIN_BALLS, totalPizzasFromOrders());
+    if (STATE.session) {
+      const current = Number(STATE.session.ballsUsed || minBalls);
+      const next = Math.max(current, minBalls);
+      STATE.session.ballsUsed = STATE.session.styleId === "PAN_SICILIAN_STANDARD" ? 1 : next;
+      return STATE.session.ballsUsed;
+    }
+    return minBalls;
   }
 
   function addPerson(name) {
@@ -661,12 +800,12 @@ function getFirstAllowedPresetId() {
     saveState();
   }
 function getSelectedOven() {
-  return (STATE.ovens || []).find(o => o.id === STATE.ovenId) || null;
+  return window.PizzaConfigLoader.getOvenById(CONFIG.ovens || [], STATE.session?.oven_id) || null;
 }
 
 function getSelectedOvenProgram(ov) {
   if (!ov || !Array.isArray(ov.programs) || !ov.programs.length) return null;
-  return ov.programs.find(p => p.id === STATE.ovenProgramId) || ov.programs[0];
+  return ov.programs.find((p) => p.id === STATE.session?.oven_program_id) || ov.programs[0];
 }
 
 const TEMP_TARGET_LABELS = {
@@ -697,62 +836,62 @@ function getProgramTempTargets(prog) {
     }));
 }
 
+  function getPlan() {
+    if (!window.PizzaCalc || typeof window.PizzaCalc.resolveSessionToPlan !== "function") {
+      return { totalDoughG: 0, ingredients: null, recommendedWaterTempC: null, warnings: [] };
+    }
+    return window.PizzaCalc.resolveSessionToPlan(STATE.session, {
+      ovens: CONFIG.ovens || [],
+      mixers: CONFIG.mixers || []
+    });
+  }
+
   /* ---------- Dough totals ---------- */
   function computeDough() {
-    const d = STATE.dough;
+    const plan = getPlan();
+    const totals = plan.ingredients?.totals;
+    const preferment = plan.ingredients?.preferment;
+    const finalMix = plan.ingredients?.finalMix;
     const ordered = totalPizzasFromOrders();
-    const balls = Math.max(MIN_BALLS, ordered);
-    const totalDoughG = balls * Number(d.ballWeightG || 260);
+    const balls = ensureMinimumBallLogic();
 
-    const h = Number(d.hydrationPct || 63) / 100;
-    const s = Number(d.saltPct || 2.8) / 100;
-    const ho = Number(d.honeyPct || 0) / 100;
-    const y = Number(d.yeastPct || 0) / 100;
-    const yeastFactor = y * yeastMultiplier(d.yeastType);
-
-    const flourG = totalDoughG / (1 + h + s + ho + yeastFactor);
-    const waterG = flourG * h;
-    const saltG = flourG * s;
-    const honeyG = flourG * ho;
-    const yeastG = flourG * yeastFactor;
-
-    const prefPct = clamp(Number(d.prefermentPct || 0), 0, 100) / 100;
-    const prefFlourG = flourG * prefPct;
-    const finalFlourG = flourG - prefFlourG;
+    if (!totals) {
+      return {
+        ordered,
+        balls,
+        totalDoughG: round(plan.totalDoughG || 0, 0),
+        flourG: 0,
+        waterG: 0,
+        saltG: 0,
+        honeyG: 0,
+        yeastG: 0,
+        prefermentFlourG: 0,
+        finalFlourG: 0,
+        yeastType: totals?.yeastType || "IDY",
+        yeastMult: 1
+      };
+    }
 
     return {
       ordered,
       balls,
-      totalDoughG: round(totalDoughG, 0),
-      flourG: round(flourG, 0),
-      waterG: round(waterG, 0),
-      saltG: round(saltG, 1),
-      honeyG: round(honeyG, 1),
-      yeastG: round(yeastG, 2),
-      prefermentFlourG: round(prefFlourG, 0),
-      finalFlourG: round(finalFlourG, 0),
-      yeastType: d.yeastType,
-      yeastMult: yeastMultiplier(d.yeastType)
+      totalDoughG: round(plan.totalDoughG || 0, 0),
+      flourG: round(totals.flourG || 0, 0),
+      waterG: round(totals.waterG || 0, 0),
+      saltG: round(totals.saltG || 0, 1),
+      honeyG: round(totals.honeyG || 0, 1),
+      yeastG: round(totals.yeastG || 0, 2),
+      prefermentFlourG: round(preferment?.flourG || 0, 0),
+      finalFlourG: round(finalMix?.flourG || 0, 0),
+      yeastType: totals.yeastType || "IDY",
+      yeastMult: 1
     };
   }
 
   /* ---------- DDT Water Temp (simple 3-factor) ---------- */
-function recommendWaterTempC(opts = {}) {
-  const d = STATE.dough;
-  const planned = d.temps || { roomC: 22, flourC: 22, targetDDTC: 23 };
-
-  const measured = (STATE.making && STATE.making.measured) ? STATE.making.measured : {};
-  const roomC  = isFiniteNumber(opts.roomC)  ? opts.roomC  : firstFinite(measured.roomC, planned.roomC);
-  const flourC = isFiniteNumber(opts.flourC) ? opts.flourC : firstFinite(measured.flourC, planned.flourC);
-
-  const target = firstFinite(opts.targetDDTC, planned.targetDDTC, 23);
-
-  // friction factor by equipment (SESSION-LEVEL)
-  const mixerId = STATE.mixerId || "hand";
-  const friction = (mixerId === "halo" || mixerId === "planetary") ? 5 : 2;
-
-  // classic 3-factor approximation
-  return round(target * 3 - roomC - flourC - friction, 1);
+function recommendWaterTempC() {
+  const plan = getPlan();
+  return plan.recommendedWaterTempC == null ? "—" : round(plan.recommendedWaterTempC, 1);
 }
 
 function isFiniteNumber(x) {
@@ -770,8 +909,8 @@ function firstFinite(...vals) {
 const FERMENTATION_HOUR_OPTIONS = [0, 24, 48];
 
 function getFermentationHourOptions(prefermentType) {
-  const pref = String(prefermentType || "direct").toLowerCase();
-  return pref === "direct" ? FERMENTATION_HOUR_OPTIONS : FERMENTATION_HOUR_OPTIONS.filter((h) => h !== 0);
+  const pref = String(prefermentType || "NONE").toUpperCase();
+  return pref === "NONE" ? FERMENTATION_HOUR_OPTIONS : FERMENTATION_HOUR_OPTIONS.filter((h) => h !== 0);
 }
 
 function normalizeFermentationHours(hours, prefermentType) {
@@ -783,18 +922,22 @@ function normalizeFermentationHours(hours, prefermentType) {
 }
 
   function doughModeCopy() {
-    const d = STATE.dough;
-    const pref = d.prefermentType;
-    const loc = d.fermentationLocation;
-    const hours = normalizeFermentationHours(d.fermentationHours, pref);
+    const s = STATE.session;
+    const pref = String(s.prefermentType || "NONE").toUpperCase();
+    const loc = s.fermentationLocation || "ROOM";
+    const hours = normalizeFermentationHours(s.totalFermentationHours, pref);
 
     const prefCopy =
-      pref === "direct"
+      pref === "NONE"
         ? "Direct dough: clean, straightforward flavor."
-        : pref === "poolish"
+        : pref === "POOLISH"
         ? "Poolish: sweeter aroma, extensibility, gentle complexity."
-        : pref === "biga"
+        : pref === "BIGA"
         ? "Biga: strength + structure, nuttier aroma, controlled fermentation."
+        : pref === "TIGA"
+        ? "Tiga: structured preferment with steady handling."
+        : pref === "POOLISH_BIGA_HYBRID"
+        ? "Hybrid: poolish aroma + biga structure."
         : "Sourdough: deeper complexity and aroma; peak timing matters.";
 
     const timeCopy =
@@ -805,29 +948,19 @@ function normalizeFermentationHours(hours, prefermentType) {
         : "48h ferment: deeper aroma, silkier texture, handle gently with stronger flour.";
 
     const locCopy =
-      loc === "room"
+      loc === "ROOM"
         ? "Room-temp fermentation: faster and sensitive to temperature swings."
-        : loc === "cold"
+        : loc === "FRIDGE"
         ? "Cold fermentation: predictable handling and slower flavor build."
-        : loc === "hybrid"
-        ? "Hybrid: start at room temp for activity, then cold for control."
-        : "Double fermentation: start warm, cold to build flavor, then finish at room temp for bake-ready dough.";
+        : "Hybrid: start at room temp for activity, then cold for control.";
 
     return `${prefCopy} ${timeCopy} ${locCopy}`;
   }
 
-  function getSelectedOven() {
-  return (STATE.ovens || []).find(o => o.id === STATE.ovenId) || null;
-}
-
-  function getSelectedOvenProgram(ov) {
-  if (!ov || !Array.isArray(ov.programs) || !ov.programs.length) return null;
-  return ov.programs.find(p => p.id === STATE.ovenProgramId) || ov.programs[0];
-}
-
   function updateSessionOutputs() {
-    const d = STATE.dough;
+    const s = STATE.session;
     const c = computeDough();
+    const plan = getPlan();
     const ballsUsed = ensureMinimumBallLogic();
     const waterRec = recommendWaterTempC();
 
@@ -838,7 +971,7 @@ function normalizeFermentationHours(hours, prefermentType) {
 
     setText("kpi-total-pizzas", totalPizzasFromOrders());
     setText("kpi-balls-used", ballsUsed);
-    setText("kpi-ball-weight", `${d.ballWeightG} g`);
+    setText("kpi-ball-weight", `${s.ballWeightG} g`);
     setText("kpi-total-dough", `${c.totalDoughG} g`);
     setText("totals-flour", `${c.flourG} g`);
     setText("totals-water", `${c.waterG} g`);
@@ -847,8 +980,8 @@ function normalizeFermentationHours(hours, prefermentType) {
     setText("totals-yeast", `${c.yeastG} g`);
     setText("pref-flour", `${c.prefermentFlourG} g`);
     setText("pref-final-flour", `${c.finalFlourG} g`);
-    setText("pref-pct", `${Number(d.prefermentPct || 0)}%`);
-    setText("pref-type", d.prefermentType);
+    setText("pref-pct", plan.ingredients?.preferment ? "—" : "0%");
+    setText("pref-type", plan.ingredients?.preferment?.type || "NONE");
 
     const doughModeEl = document.getElementById("dough-mode-copy");
     if (doughModeEl) doughModeEl.textContent = doughModeCopy();
@@ -857,7 +990,7 @@ function normalizeFermentationHours(hours, prefermentType) {
     if (waterEl) waterEl.value = `${waterRec} °C`;
 
     const prefTypeSelect = document.getElementById("prefType");
-    if (prefTypeSelect) prefTypeSelect.value = d.prefermentType;
+    if (prefTypeSelect) prefTypeSelect.value = s.prefermentType;
   }
 
   function updateMakingOutputs() {
@@ -881,15 +1014,25 @@ function normalizeFermentationHours(hours, prefermentType) {
 
   function renderSession() {
     const root = $("#tab-session");
-    const d = STATE.dough;
-    const method = getMethod(d.methodId);
+    const s = STATE.session;
+    const method = getMethod(s.doughMethodId);
     const c = computeDough();
+    const plan = getPlan();
     const waterRec = recommendWaterTempC();
     const ballsUsed = ensureMinimumBallLogic();
     const ov = getSelectedOven();
     const prog = getSelectedOvenProgram(ov);
-    const showProgramSelect = ov?.programs?.length && ov?.fuelType !== "wood";
-    const fermHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
+    const showProgramSelect = ov?.programs?.length;
+    const allowOverrides = Boolean(ov?.capabilities?.allow_manual_override);
+    const hasBroiler = Boolean(ov?.capabilities?.has_broiler);
+    const targetKeys = prog?.temp_targets_f ? Object.keys(prog.temp_targets_f) : [];
+    const showDeck = targetKeys.includes("deck");
+    const showTop = targetKeys.includes("top");
+    const showAir = targetKeys.includes("air");
+    const showManualOverrides = allowOverrides && s.oven_overrides?.enabled;
+    const fermHours = normalizeFermentationHours(s.totalFermentationHours, s.prefermentType);
+    const showPreferment = s.doughModality === "MAKE_DOUGH";
+    const showExisting = s.doughModality === "USE_EXISTING_DOUGH";
 
     root.innerHTML = `
       <div class="card">
@@ -899,25 +1042,49 @@ function normalizeFermentationHours(hours, prefermentType) {
         <div class="kpi">
           <div class="box"><div class="small">Pizzas ordered</div><div class="v" id="kpi-total-pizzas">${totalPizzasFromOrders()}</div></div>
           <div class="box"><div class="small">Balls used</div><div class="v" id="kpi-balls-used">${ballsUsed}</div></div>
-          <div class="box"><div class="small">Ball weight</div><div class="v" id="kpi-ball-weight">${d.ballWeightG} g</div></div>
+          <div class="box"><div class="small">Ball weight</div><div class="v" id="kpi-ball-weight">${s.ballWeightG} g</div></div>
           <div class="box"><div class="small">Total dough</div><div class="v" id="kpi-total-dough">${c.totalDoughG} g</div></div>
         </div>
       </div>
 
       <div class="card">
-        <h3>Eating Time</h3>
+        <h3>Session Settings</h3>
         <div class="grid-2">
           <div>
             <label>Planned time to eat</label>
-            <input type="datetime-local" id="plannedEat" value="${escapeHtml(d.plannedEat)}">
+            <input type="datetime-local" id="plannedEat" value="${escapeHtml(isoToLocalInput(s.plannedEatTimeISO))}">
             <div class="small">Timeline is scheduled backward from this time.</div>
           </div>
+          <div>
+            <label>Timezone</label>
+            <input type="text" id="timezone" value="${escapeHtml(s.timezone)}">
+          </div>
+          <div>
+            <label>Dough modality</label>
+            <select id="doughModality">
+              <option value="MAKE_DOUGH" ${s.doughModality === "MAKE_DOUGH" ? "selected" : ""}>Make dough</option>
+              <option value="USE_EXISTING_DOUGH" ${s.doughModality === "USE_EXISTING_DOUGH" ? "selected" : ""}>Use existing dough</option>
+            </select>
+          </div>
+          <div>
+            <label>Style</label>
+            <select id="styleId">
+              <option value="ROUND_NEAPOLITAN" ${s.styleId === "ROUND_NEAPOLITAN" ? "selected" : ""}>Round Neapolitan</option>
+              <option value="PAN_SICILIAN_STANDARD" ${s.styleId === "PAN_SICILIAN_STANDARD" ? "selected" : ""}>Pan Sicilian (standard)</option>
+            </select>
+            <div class="small">Pan style forces 1 pan/ball.</div>
+          </div>
+        </div>
+      </div>
 
+      <div class="card">
+        <h3>Equipment</h3>
+        <div class="grid-2">
           <div>
             <label>Oven</label>
             <select id="ovenSelect">
-              ${(STATE.ovens || []).map(o => `
-                <option value="${o.id}" ${o.id === STATE.ovenId ? "selected" : ""}>
+              ${(CONFIG.ovens || []).map(o => `
+                <option value="${o.id}" ${o.id === s.oven_id ? "selected" : ""}>
                   ${escapeHtml(o.label)}
                 </option>
               `).join("")}
@@ -931,7 +1098,7 @@ function normalizeFermentationHours(hours, prefermentType) {
 
             ${showProgramSelect ? `
               <div style="margin-top:10px;">
-                <label>Setting</label>
+                <label>Program</label>
                 <select id="ovenProgramSelect">
                   ${ov.programs.map(p => `
                     <option value="${p.id}" ${(prog && p.id === prog.id) ? "selected" : ""}>
@@ -948,58 +1115,150 @@ function normalizeFermentationHours(hours, prefermentType) {
               </div>
             ` : ""}
           </div>
+
+          <div>
+            <label>Mixer</label>
+            <select id="mixerSelect">
+              ${(CONFIG.mixers || []).map(m => `
+                <option value="${m.id}" ${m.id === s.mixer_id ? "selected" : ""}>
+                  ${escapeHtml(m.label)}
+                </option>
+              `).join("")}
+            </select>
+            <div class="small">Friction factor is resolved from the mixer catalog.</div>
+          </div>
         </div>
       </div>
 
-
       <div class="card">
-        <h3>Dough Method Preset</h3>
-        <select id="doughMethodSelect">
-          ${BASE_DOUGH_METHODS
-            .map(
-              (m) => `
-              <option value="${m.id}" ${m.id === d.methodId ? "selected" : ""}>
-                ${escapeHtml(m.label)}
-              </option>`
-            )
-            .join("")}
-        </select>
-        <p>${escapeHtml(method.description)}</p>
+        <h3>Dough Method & Preset</h3>
+        <div class="grid-2">
+          <div>
+            <label>Dough method</label>
+            <select id="doughMethodSelect">
+              ${(CONFIG.doughMethods || [])
+                .map(
+                  (m) => `
+                  <option value="${m.id}" ${m.id === s.doughMethodId ? "selected" : ""}>
+                    ${escapeHtml(m.label)}
+                  </option>`
+                )
+                .join("")}
+            </select>
+            <div class="small">${escapeHtml(method?.notes || "")}</div>
+          </div>
+          <div>
+            <label>Dough preset</label>
+            <select id="doughPresetSelect">
+              ${(CONFIG.doughPresets || [])
+                .map(
+                  (m) => `
+                  <option value="${m.id}" ${m.id === s.doughPresetId ? "selected" : ""}>
+                    ${escapeHtml(m.label)}
+                  </option>`
+                )
+                .join("")}
+            </select>
+            <div class="small">${escapeHtml((CONFIG.doughPresets || []).find((p) => p.id === s.doughPresetId)?.description || "")}</div>
+          </div>
+        </div>
       </div>
 
+      <div class="card">
+        <h3>Sizing</h3>
+        <div class="grid-2">
+          <div>
+            <label>Balls used <span class="dirty-indicator" data-dirty-for="ballsUsed" hidden></span></label>
+            <input type="text" id="ballsUsed" inputmode="numeric" data-numeric="true"
+              ${s.styleId === "PAN_SICILIAN_STANDARD" ? "disabled" : ""}
+              value="${escapeHtml(getInputDisplayValue("ballsUsed", Number(s.ballsUsed || MIN_BALLS)))}">
+            <div class="input-error" data-error-for="ballsUsed" hidden></div>
+          </div>
+          <div>
+            <label>Ball weight (g) <span class="dirty-indicator" data-dirty-for="ballWeight" hidden></span></label>
+            <input type="text" id="ballWeight" inputmode="numeric" data-numeric="true"
+              value="${escapeHtml(getInputDisplayValue("ballWeight", Number(s.ballWeightG || 260)))}">
+            <div class="input-error" data-error-for="ballWeight" hidden></div>
+          </div>
+        </div>
+      </div>
+
+      ${allowOverrides ? `
+      <div class="card">
+        <h3>Oven Overrides</h3>
+        <label style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" id="ovenOverrideToggle" ${s.oven_overrides?.enabled ? "checked" : ""}>
+          Enable manual overrides
+        </label>
+        ${showManualOverrides ? `
+          <div class="grid-2" style="margin-top:10px;">
+            ${showDeck ? `
+            <div>
+              <label>Deck temp (°F)</label>
+              <input type="text" id="overrideDeck" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("overrideDeck", s.oven_overrides?.deck_temp_f ?? ""))}">
+            </div>` : ""}
+            ${showTop ? `
+            <div>
+              <label>Top temp (°F)</label>
+              <input type="text" id="overrideTop" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("overrideTop", s.oven_overrides?.top_temp_f ?? ""))}">
+            </div>` : ""}
+            ${showAir ? `
+            <div>
+              <label>Air temp (°F)</label>
+              <input type="text" id="overrideAir" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("overrideAir", s.oven_overrides?.air_temp_f ?? ""))}">
+            </div>` : ""}
+            <div>
+              <label>Bake time (sec)</label>
+              <input type="text" id="overrideBakeTime" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("overrideBakeTime", s.oven_overrides?.bake_time_seconds ?? ""))}">
+            </div>
+            ${hasBroiler ? `
+            <div>
+              <label>Broiler mode</label>
+              <select id="broilerMode">
+                <option value="AUTO" ${s.oven_overrides?.broiler_mode === "AUTO" ? "selected" : ""}>Auto</option>
+                <option value="ON" ${s.oven_overrides?.broiler_mode === "ON" ? "selected" : ""}>On</option>
+                <option value="OFF" ${s.oven_overrides?.broiler_mode === "OFF" ? "selected" : ""}>Off</option>
+              </select>
+            </div>` : ""}
+          </div>
+        ` : ""}
+      </div>
+      ` : ""}
+
+      ${showPreferment ? `
       <div class="card">
         <h3>Fermentation Plan</h3>
         <div class="grid-2">
           <div>
             <label>Preferment type</label>
             <select id="prefType">
-              <option value="direct" ${d.prefermentType === "direct" ? "selected" : ""}>None (Direct)</option>
-              <option value="poolish" ${d.prefermentType === "poolish" ? "selected" : ""}>Poolish (100% hydration)</option>
-              <option value="biga" ${d.prefermentType === "biga" ? "selected" : ""}>Biga (~55% hydration)</option>
-              <option value="sourdough" ${d.prefermentType === "sourdough" ? "selected" : ""}>Sourdough starter</option>
+              <option value="NONE" ${s.prefermentType === "NONE" ? "selected" : ""}>None (Direct)</option>
+              <option value="POOLISH" ${s.prefermentType === "POOLISH" ? "selected" : ""}>Poolish</option>
+              <option value="BIGA" ${s.prefermentType === "BIGA" ? "selected" : ""}>Biga</option>
+              <option value="TIGA" ${s.prefermentType === "TIGA" ? "selected" : ""}>Tiga</option>
+              <option value="POOLISH_BIGA_HYBRID" ${s.prefermentType === "POOLISH_BIGA_HYBRID" ? "selected" : ""}>Poolish + Biga Hybrid</option>
+              <option value="SOURDOUGH" ${s.prefermentType === "SOURDOUGH" ? "selected" : ""}>Sourdough</option>
             </select>
           </div>
           <div>
-            <label>Preferment % (flour pre-fermented) <span class="dirty-indicator" data-dirty-for="prefPct" hidden></span></label>
-            <input type="text" id="prefPct" inputmode="numeric" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("prefPct", Number(d.prefermentPct || 0)))}">
-            <div class="input-error" data-error-for="prefPct" hidden></div>
-            <div class="small">0% = direct. 30–60% common. 100% allowed (advanced).</div>
-          </div>
-
-          <div>
             <label>Fermentation location</label>
             <select id="fermLoc">
-              <option value="cold" ${d.fermentationLocation === "cold" ? "selected" : ""}>Cold (fridge)</option>
-              <option value="room" ${d.fermentationLocation === "room" ? "selected" : ""}>Room temp</option>
-              <option value="hybrid" ${d.fermentationLocation === "hybrid" ? "selected" : ""}>Hybrid (room → cold)</option>
-              <option value="double" ${d.fermentationLocation === "double" ? "selected" : ""}>Double ferment (room → cold → room)</option>
+              <option value="ROOM" ${s.fermentationLocation === "ROOM" ? "selected" : ""}>Room</option>
+              <option value="FRIDGE" ${s.fermentationLocation === "FRIDGE" ? "selected" : ""}>Fridge</option>
+              <option value="HYBRID" ${s.fermentationLocation === "HYBRID" ? "selected" : ""}>Hybrid</option>
+            </select>
+          </div>
+          <div>
+            <label>Fermentation mode</label>
+            <select id="fermMode">
+              <option value="SINGLE" ${s.fermentationMode === "SINGLE" ? "selected" : ""}>Single</option>
+              <option value="DOUBLE" ${s.fermentationMode === "DOUBLE" ? "selected" : ""}>Double</option>
             </select>
           </div>
           <div>
             <label>Total fermentation time (hours)</label>
             <select id="fermHours">
-              ${getFermentationHourOptions(d.prefermentType).map((hrs) => `
+              ${getFermentationHourOptions(s.prefermentType).map((hrs) => `
                 <option value="${hrs}" ${fermHours === hrs ? "selected" : ""}>${hrs}</option>
               `).join("")}
             </select>
@@ -1010,59 +1269,151 @@ function normalizeFermentationHours(hours, prefermentType) {
       </div>
 
       <div class="card">
-        <h3>Global Dough Controls</h3>
+        <h3>Preferment Options</h3>
         <div class="grid-2">
+          ${s.prefermentType === "POOLISH" ? `
           <div>
-            <label>Mixing method</label>
-            <select id="mixMethod">
-              <option value="hand" ${d.mixingMethod === "hand" ? "selected" : ""}>Hand mix</option>
-              <option value="halo" ${d.mixingMethod === "halo" ? "selected" : ""}>Halo mixer</option>
+            <label>Honey in poolish</label>
+            <select id="poolishHoney">
+              <option value="false" ${!s.prefermentOptions?.poolish?.honeyEnabled ? "selected" : ""}>No</option>
+              <option value="true" ${s.prefermentOptions?.poolish?.honeyEnabled ? "selected" : ""}>Yes</option>
             </select>
           </div>
-
           <div>
-            <label>Yeast type</label>
-            <select id="yeastType">
-              <option value="idy" ${d.yeastType === "idy" ? "selected" : ""}>Instant Dry Yeast (IDY)</option>
-              <option value="ady" ${d.yeastType === "ady" ? "selected" : ""}>Active Dry Yeast (ADY)</option>
-              <option value="fresh" ${d.yeastType === "fresh" ? "selected" : ""}>Fresh yeast</option>
+            <label>Poolish batch override</label>
+            <select id="poolishBatchOverride">
+              <option value="AUTO" ${s.prefermentOptions?.poolish?.poolishBatchOverride === "AUTO" ? "selected" : ""}>Auto</option>
+              <option value="FORCE_300" ${s.prefermentOptions?.poolish?.poolishBatchOverride === "FORCE_300" ? "selected" : ""}>Force 300g</option>
+              <option value="FORCE_400" ${s.prefermentOptions?.poolish?.poolishBatchOverride === "FORCE_400" ? "selected" : ""}>Force 400g</option>
+              <option value="CUSTOM" ${s.prefermentOptions?.poolish?.poolishBatchOverride === "CUSTOM" ? "selected" : ""}>Custom</option>
             </select>
-            <div class="small">Conversions: ADY ≈ 3× IDY, Fresh ≈ 9× IDY.</div>
           </div>
-
           <div>
-            <label>Ball weight (g) <span class="dirty-indicator" data-dirty-for="ballWeight" hidden></span></label>
-            <input type="text" id="ballWeight" inputmode="numeric" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("ballWeight", Number(d.ballWeightG || 260)))}">
-            <div class="input-error" data-error-for="ballWeight" hidden></div>
+            <label>Custom poolish flour (g)</label>
+            <input type="text" id="poolishCustomFlour" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("poolishCustomFlour", s.prefermentOptions?.poolish?.customPoolishFlourG ?? ""))}">
           </div>
+          ` : ""}
+          ${s.prefermentType === "BIGA" ? `
+          <div>
+            <label>Biga % total flour</label>
+            <input type="text" id="bigaPct" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("bigaPct", s.prefermentOptions?.biga?.bigaPercentTotalFlour ?? 30))}">
+          </div>
+          <div>
+            <label>Biga hydration %</label>
+            <input type="text" id="bigaHydration" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("bigaHydration", s.prefermentOptions?.biga?.bigaHydrationPct ?? 55))}">
+          </div>
+          ` : ""}
+          ${s.prefermentType === "TIGA" ? `
+          <div>
+            <label>Tiga % total flour</label>
+            <input type="text" id="tigaPct" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("tigaPct", s.prefermentOptions?.tiga?.tigaPercentTotalFlour ?? 30))}">
+          </div>
+          ` : ""}
+          ${s.prefermentType === "POOLISH_BIGA_HYBRID" ? `
+          <div>
+            <label>Hybrid honey in poolish</label>
+            <select id="hybridHoney">
+              <option value="false" ${!s.prefermentOptions?.hybrid?.honeyEnabled ? "selected" : ""}>No</option>
+              <option value="true" ${s.prefermentOptions?.hybrid?.honeyEnabled ? "selected" : ""}>Yes</option>
+            </select>
+          </div>
+          <div>
+            <label>Poolish batch override</label>
+            <select id="hybridPoolishOverride">
+              <option value="AUTO" ${s.prefermentOptions?.hybrid?.poolishBatchOverride === "AUTO" ? "selected" : ""}>Auto</option>
+              <option value="FORCE_300" ${s.prefermentOptions?.hybrid?.poolishBatchOverride === "FORCE_300" ? "selected" : ""}>Force 300g</option>
+              <option value="FORCE_400" ${s.prefermentOptions?.hybrid?.poolishBatchOverride === "FORCE_400" ? "selected" : ""}>Force 400g</option>
+              <option value="CUSTOM" ${s.prefermentOptions?.hybrid?.poolishBatchOverride === "CUSTOM" ? "selected" : ""}>Custom</option>
+            </select>
+          </div>
+          <div>
+            <label>Custom poolish flour (g)</label>
+            <input type="text" id="hybridPoolishCustomFlour" inputmode="numeric"
+              value="${escapeHtml(getInputDisplayValue("hybridPoolishCustomFlour", s.prefermentOptions?.hybrid?.customPoolishFlourG ?? ""))}">
+          </div>
+          <div>
+            <label>Biga % of remainder flour</label>
+            <input type="text" id="hybridBigaPct" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("hybridBigaPct", s.prefermentOptions?.hybrid?.bigaPercentOfRemainderFlour ?? 30))}">
+          </div>
+          <div>
+            <label>Biga hydration %</label>
+            <input type="text" id="hybridBigaHydration" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("hybridBigaHydration", s.prefermentOptions?.hybrid?.bigaHydrationPct ?? 55))}">
+          </div>
+          ` : ""}
+          ${s.prefermentType === "SOURDOUGH" ? `
+          <div>
+            <label>Starter hydration</label>
+            <select id="starterHydration">
+              <option value="50" ${s.prefermentOptions?.sourdough?.starterHydrationPct === 50 ? "selected" : ""}>50%</option>
+              <option value="100" ${s.prefermentOptions?.sourdough?.starterHydrationPct === 100 ? "selected" : ""}>100%</option>
+            </select>
+          </div>
+          <div>
+            <label>Inoculation % (flour basis)</label>
+            <input type="text" id="starterInoculation" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("starterInoculation", s.prefermentOptions?.sourdough?.inoculationPctFlourBasis ?? 20))}">
+          </div>
+          <div>
+            <label>Commercial yeast assist</label>
+            <select id="yeastAssistToggle">
+              <option value="false" ${!s.prefermentOptions?.sourdough?.useCommercialYeastAssist ? "selected" : ""}>No</option>
+              <option value="true" ${s.prefermentOptions?.sourdough?.useCommercialYeastAssist ? "selected" : ""}>Yes</option>
+            </select>
+          </div>
+          <div>
+            <label>Yeast assist % IDY</label>
+            <input type="text" id="yeastAssistPct" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("yeastAssistPct", s.prefermentOptions?.sourdough?.yeastAssistPctIDY ?? 0.02))}">
+          </div>
+          ` : ""}
+        </div>
+      </div>
 
+      <div class="card">
+        <h3>Formula Overrides</h3>
+        <div class="grid-2">
           <div>
             <label>Hydration % <span class="dirty-indicator" data-dirty-for="hydration" hidden></span></label>
             <input type="text" id="hydration" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("hydration", Number(d.hydrationPct || 63)))}">
+              value="${escapeHtml(getInputDisplayValue("hydration", Number(s.formulaOverrides?.hydrationPct ?? 63)))}">
             <div class="input-error" data-error-for="hydration" hidden></div>
           </div>
-
           <div>
             <label>Salt % <span class="dirty-indicator" data-dirty-for="salt" hidden></span></label>
             <input type="text" id="salt" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("salt", Number(d.saltPct || 2.8)))}">
+              value="${escapeHtml(getInputDisplayValue("salt", Number(s.formulaOverrides?.saltPct ?? 2.8)))}">
             <div class="input-error" data-error-for="salt" hidden></div>
           </div>
-
           <div>
-            <label>Honey % (optional) <span class="dirty-indicator" data-dirty-for="honey" hidden></span></label>
+            <label>Oil % <span class="dirty-indicator" data-dirty-for="oil" hidden></span></label>
+            <input type="text" id="oil" inputmode="decimal" data-numeric="true"
+              value="${escapeHtml(getInputDisplayValue("oil", Number(s.formulaOverrides?.oilPct ?? 0)))}">
+            <div class="input-error" data-error-for="oil" hidden></div>
+          </div>
+          <div>
+            <label>Honey % <span class="dirty-indicator" data-dirty-for="honey" hidden></span></label>
             <input type="text" id="honey" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("honey", Number(d.honeyPct || 0)))}">
+              value="${escapeHtml(getInputDisplayValue("honey", Number(s.formulaOverrides?.honeyPct ?? 0)))}">
             <div class="input-error" data-error-for="honey" hidden></div>
           </div>
-
           <div>
-            <label>Yeast % (baker's) <span class="dirty-indicator" data-dirty-for="yeastPct" hidden></span></label>
+            <label>Malt % <span class="dirty-indicator" data-dirty-for="malt" hidden></span></label>
+            <input type="text" id="malt" inputmode="decimal" data-numeric="true"
+              value="${escapeHtml(getInputDisplayValue("malt", Number(s.formulaOverrides?.maltPct ?? 0)))}">
+            <div class="input-error" data-error-for="malt" hidden></div>
+          </div>
+          <div>
+            <label>Yeast % (IDY equiv) <span class="dirty-indicator" data-dirty-for="yeastPct" hidden></span></label>
             <input type="text" id="yeastPct" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("yeastPct", Number(d.yeastPct || 0.05)))}">
+              value="${escapeHtml(getInputDisplayValue("yeastPct", Number(s.formulaOverrides?.yeastPctIDY ?? 0.05)))}">
             <div class="input-error" data-error-for="yeastPct" hidden></div>
+          </div>
+          <div>
+            <label>Yeast type</label>
+            <select id="yeastType">
+              <option value="IDY" ${s.formulaOverrides?.yeastType === "IDY" ? "selected" : ""}>Instant Dry (IDY)</option>
+              <option value="ADY" ${s.formulaOverrides?.yeastType === "ADY" ? "selected" : ""}>Active Dry (ADY)</option>
+              <option value="FRESH" ${s.formulaOverrides?.yeastType === "FRESH" ? "selected" : ""}>Fresh yeast</option>
+            </select>
           </div>
         </div>
       </div>
@@ -1073,19 +1424,25 @@ function normalizeFermentationHours(hours, prefermentType) {
           <div>
             <label>Room temp (°C) <span class="dirty-indicator" data-dirty-for="roomC" hidden></span></label>
             <input type="text" id="roomC" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("roomC", Number(d.temps.roomC || 22)))}">
+              value="${escapeHtml(getInputDisplayValue("roomC", Number(s.temps.roomTempC || 22)))}">
             <div class="input-error" data-error-for="roomC" hidden></div>
           </div>
           <div>
             <label>Flour temp (°C) <span class="dirty-indicator" data-dirty-for="flourC" hidden></span></label>
             <input type="text" id="flourC" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("flourC", Number(d.temps.flourC || 22)))}">
+              value="${escapeHtml(getInputDisplayValue("flourC", Number(s.temps.flourTempC || 22)))}">
             <div class="input-error" data-error-for="flourC" hidden></div>
+          </div>
+          <div>
+            <label>Fridge temp (°C) <span class="dirty-indicator" data-dirty-for="fridgeC" hidden></span></label>
+            <input type="text" id="fridgeC" inputmode="decimal" data-numeric="true"
+              value="${escapeHtml(getInputDisplayValue("fridgeC", Number(s.temps.fridgeTempC || 4)))}">
+            <div class="input-error" data-error-for="fridgeC" hidden></div>
           </div>
           <div>
             <label>Target DDT (°C) <span class="dirty-indicator" data-dirty-for="ddtC" hidden></span></label>
             <input type="text" id="ddtC" inputmode="decimal" data-numeric="true"
-              value="${escapeHtml(getInputDisplayValue("ddtC", Number(d.temps.targetDDTC || 23)))}">
+              value="${escapeHtml(getInputDisplayValue("ddtC", Number(s.temperaturePlanning?.targetDDTC || 23)))}">
             <div class="input-error" data-error-for="ddtC" hidden></div>
           </div>
           <div>
@@ -1095,59 +1452,107 @@ function normalizeFermentationHours(hours, prefermentType) {
         </div>
         <p>Goal: predictable fermentation. This is the temperature lever that improves consistency.</p>
       </div>
+      ` : ""}
+
+      ${showExisting ? `
+      <div class="card">
+        <h3>Existing Dough</h3>
+        <div class="grid-2">
+          <div>
+            <label>Source</label>
+            <select id="existingSource">
+              <option value="FROZEN" ${s.existingDough?.source === "FROZEN" ? "selected" : ""}>Frozen</option>
+              <option value="STORE_BOUGHT" ${s.existingDough?.source === "STORE_BOUGHT" ? "selected" : ""}>Store bought</option>
+            </select>
+          </div>
+          <div>
+            <label>Frozen state</label>
+            <select id="existingFrozenState">
+              <option value="HARD_FROZEN" ${s.existingDough?.frozenState === "HARD_FROZEN" ? "selected" : ""}>Hard frozen</option>
+              <option value="PARTIALLY_THAWED" ${s.existingDough?.frozenState === "PARTIALLY_THAWED" ? "selected" : ""}>Partially thawed</option>
+            </select>
+          </div>
+          <div>
+            <label>Packaging</label>
+            <select id="existingPackaging">
+              <option value="BAG" ${s.existingDough?.packaging === "BAG" ? "selected" : ""}>Bag</option>
+              <option value="CONTAINER" ${s.existingDough?.packaging === "CONTAINER" ? "selected" : ""}>Container</option>
+              <option value="WRAPPED" ${s.existingDough?.packaging === "WRAPPED" ? "selected" : ""}>Wrapped</option>
+            </select>
+          </div>
+          <div>
+            <label>Thaw location</label>
+            <select id="existingThawLoc">
+              <option value="FRIDGE" ${s.existingDough?.thawLocation === "FRIDGE" ? "selected" : ""}>Fridge</option>
+              <option value="ROOM" ${s.existingDough?.thawLocation === "ROOM" ? "selected" : ""}>Room</option>
+              <option value="HYBRID" ${s.existingDough?.thawLocation === "HYBRID" ? "selected" : ""}>Hybrid</option>
+            </select>
+          </div>
+          <div>
+            <label>Balls used</label>
+            <input type="text" id="existingBalls" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("existingBalls", Number(s.existingDough?.ballsUsed ?? ballsUsed)))}">
+          </div>
+          <div>
+            <label>Ball weight (g)</label>
+            <input type="text" id="existingBallWeight" inputmode="numeric" value="${escapeHtml(getInputDisplayValue("existingBallWeight", Number(s.existingDough?.ballWeightG ?? s.ballWeightG)))}">
+          </div>
+        </div>
+      </div>
+      ` : ""}
 
       <div class="card">
         <h3>Ingredient Totals (dough)</h3>
-        <div class="kpi">
-          <div class="box"><div class="small">Flour</div><div class="v" id="totals-flour">${c.flourG} g</div></div>
-          <div class="box"><div class="small">Water</div><div class="v" id="totals-water">${c.waterG} g</div></div>
-          <div class="box"><div class="small">Salt</div><div class="v" id="totals-salt">${c.saltG} g</div></div>
-          <div class="box"><div class="small">Honey</div><div class="v" id="totals-honey">${c.honeyG} g</div></div>
-          <div class="box"><div class="small">Yeast</div><div class="v" id="totals-yeast">${c.yeastG} g</div></div>
-        </div>
-
-        <div class="card" style="margin-top:12px;">
-          <h3>Preferment Split (flour)</h3>
+        ${plan.ingredients ? `
           <div class="kpi">
-            <div class="box"><div class="small">Preferment flour</div><div class="v" id="pref-flour">${c.prefermentFlourG} g</div></div>
-            <div class="box"><div class="small">Final flour</div><div class="v" id="pref-final-flour">${c.finalFlourG} g</div></div>
-            <div class="box"><div class="small">Preferment %</div><div class="v" id="pref-pct">${Number(d.prefermentPct || 0)}%</div></div>
-            <div class="box"><div class="small">Preferment type</div><div class="v" id="pref-type">${escapeHtml(d.prefermentType)}</div></div>
+            <div class="box"><div class="small">Flour</div><div class="v" id="totals-flour">${c.flourG} g</div></div>
+            <div class="box"><div class="small">Water</div><div class="v" id="totals-water">${c.waterG} g</div></div>
+            <div class="box"><div class="small">Salt</div><div class="v" id="totals-salt">${c.saltG} g</div></div>
+            <div class="box"><div class="small">Honey</div><div class="v" id="totals-honey">${c.honeyG} g</div></div>
+            <div class="box"><div class="small">Yeast</div><div class="v" id="totals-yeast">${c.yeastG} g</div></div>
           </div>
-        </div>
+
+          <div class="card" style="margin-top:12px;">
+            <h3>Preferment Split (flour)</h3>
+            <div class="kpi">
+              <div class="box"><div class="small">Preferment flour</div><div class="v" id="pref-flour">${c.prefermentFlourG} g</div></div>
+              <div class="box"><div class="small">Final flour</div><div class="v" id="pref-final-flour">${c.finalFlourG} g</div></div>
+              <div class="box"><div class="small">Preferment %</div><div class="v" id="pref-pct">—</div></div>
+              <div class="box"><div class="small">Preferment type</div><div class="v" id="pref-type">${escapeHtml(plan.ingredients?.preferment?.type || "NONE")}</div></div>
+            </div>
+          </div>
+        ` : `
+          <div class="small">Using existing dough; ingredient totals are not computed.</div>
+        `}
       </div>
     `;
 
     // Wiring
-    $("#plannedEat").onchange = (e) => { d.plannedEat = e.target.value; saveState(); render(); };
-    $("#doughMethodSelect").onchange = (e) => applyDoughMethod(e.target.value);
+    $("#plannedEat").onchange = (e) => { s.plannedEatTimeISO = localInputToISO(e.target.value); saveState(); render(); };
+    $("#timezone").onchange = (e) => { s.timezone = e.target.value || "America/Toronto"; saveState(); render(); };
+    $("#doughModality").onchange = (e) => { s.doughModality = e.target.value; saveState(); render(); };
+    $("#styleId").onchange = (e) => {
+      s.styleId = e.target.value;
+      s.existingDough.styleId = s.styleId;
+      if (s.styleId === "PAN_SICILIAN_STANDARD") s.ballsUsed = 1;
+      saveState();
+      render();
+    };
+    $("#doughMethodSelect").onchange = (e) => { s.doughMethodId = e.target.value; saveState(); render(); };
+    $("#doughPresetSelect").onchange = (e) => applyDoughPreset(e.target.value);
 
-    $("#ovenSelect").onchange = (e) => {
-  STATE.ovenId = e.target.value;
-
-  // Optional: keep old field updated for compatibility with your existing making timeline logic
-  const ov = getOvenById(STATE.ovenId);
-  if (ov) {
-    if (ov.id.includes("breville")) d.bakeEnvironment = "breville";
-    else if (ov.id.includes("wfo") || ov.fuelType === "wood") d.bakeEnvironment = "wfo";
-  }
-
-  saveState();
-  render();
-};
     // Oven selection
     const ovenSel = $("#ovenSelect");
     if (ovenSel) {
       ovenSel.onchange = (e) => {
-        STATE.ovenId = e.target.value;
+        s.oven_id = e.target.value;
 
         // When oven changes, ensure program selection is valid/reset
         const newOv = getSelectedOven();
         if (newOv?.programs?.length) {
-          const keep = newOv.programs.some(p => p.id === STATE.ovenProgramId);
-          if (!keep) STATE.ovenProgramId = newOv.programs[0].id;
+          const keep = newOv.programs.some(p => p.id === s.oven_program_id);
+          if (!keep) s.oven_program_id = newOv.programs[0].id;
         } else {
-          STATE.ovenProgramId = null;
+          s.oven_program_id = null;
         }
 
         saveState();
@@ -1159,102 +1564,221 @@ function normalizeFermentationHours(hours, prefermentType) {
     const progSel = $("#ovenProgramSelect");
     if (progSel) {
       progSel.onchange = (e) => {
-        STATE.ovenProgramId = e.target.value;
+        s.oven_program_id = e.target.value;
         saveState();
         render();
       };
     }
 
+    if ($("#ovenOverrideToggle")) {
+      $("#ovenOverrideToggle").onchange = (e) => {
+        s.oven_overrides = s.oven_overrides || defaultState().session.oven_overrides;
+        s.oven_overrides.enabled = e.target.checked;
+        saveState();
+        render();
+      };
+    }
+    if ($("#overrideDeck")) {
+      $("#overrideDeck").onchange = (e) => { s.oven_overrides.deck_temp_f = Number(e.target.value || 0) || null; saveState(); render(); };
+    }
+    if ($("#overrideTop")) {
+      $("#overrideTop").onchange = (e) => { s.oven_overrides.top_temp_f = Number(e.target.value || 0) || null; saveState(); render(); };
+    }
+    if ($("#overrideAir")) {
+      $("#overrideAir").onchange = (e) => { s.oven_overrides.air_temp_f = Number(e.target.value || 0) || null; saveState(); render(); };
+    }
+    if ($("#overrideBakeTime")) {
+      $("#overrideBakeTime").onchange = (e) => { s.oven_overrides.bake_time_seconds = Number(e.target.value || 0) || null; saveState(); render(); };
+    }
+    if ($("#broilerMode")) {
+      $("#broilerMode").onchange = (e) => { s.oven_overrides.broiler_mode = e.target.value; saveState(); render(); };
+    }
 
-    $("#prefType").onchange = (e) => {
-      d.prefermentType = e.target.value;
-      if (d.prefermentType === "direct") d.prefermentPct = 0;
-      d.fermentationHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
-      saveState();
-      render();
-    };
-    bindNumericInput($("#prefPct"), {
-      key: "prefPct",
-      getValue: () => Number(d.prefermentPct || 0),
-      setValue: (value) => {
-        d.prefermentPct = clamp(value, 0, 100);
-        if (d.prefermentType === "direct" && d.prefermentPct > 0) d.prefermentType = "poolish";
-      },
-      min: 0,
-      max: 100,
-      integer: true,
-      onCommit: updateSessionOutputs
-    });
+    const mixerSel = $("#mixerSelect");
+    if (mixerSel) {
+      mixerSel.onchange = (e) => { s.mixer_id = e.target.value; saveState(); render(); };
+    }
 
-    $("#fermLoc").onchange = (e) => { d.fermentationLocation = e.target.value; saveState(); render(); };
-    $("#fermHours").onchange = (e) => {
-      d.fermentationHours = normalizeFermentationHours(e.target.value, d.prefermentType);
-      saveState();
-      render();
-    };
+    if ($("#prefType")) {
+      $("#prefType").onchange = (e) => {
+        s.prefermentType = e.target.value;
+        s.totalFermentationHours = normalizeFermentationHours(s.totalFermentationHours, s.prefermentType);
+        saveState();
+        render();
+      };
+    }
 
-    $("#mixMethod").onchange = (e) => { d.mixingMethod = e.target.value; saveState(); render(); };
-    $("#yeastType").onchange = (e) => { d.yeastType = e.target.value; saveState(); render(); };
+    if ($("#fermLoc")) {
+      $("#fermLoc").onchange = (e) => { s.fermentationLocation = e.target.value; saveState(); render(); };
+    }
+    if ($("#fermMode")) {
+      $("#fermMode").onchange = (e) => { s.fermentationMode = e.target.value; saveState(); render(); };
+    }
+    if ($("#fermHours")) {
+      $("#fermHours").onchange = (e) => {
+        s.totalFermentationHours = normalizeFermentationHours(e.target.value, s.prefermentType);
+        saveState();
+        render();
+      };
+    }
+
+    if ($("#poolishHoney")) {
+      $("#poolishHoney").onchange = (e) => { s.prefermentOptions.poolish.honeyEnabled = e.target.value === "true"; saveState(); render(); };
+    }
+    if ($("#poolishBatchOverride")) {
+      $("#poolishBatchOverride").onchange = (e) => { s.prefermentOptions.poolish.poolishBatchOverride = e.target.value; saveState(); render(); };
+    }
+    if ($("#poolishCustomFlour")) {
+      $("#poolishCustomFlour").onchange = (e) => { s.prefermentOptions.poolish.customPoolishFlourG = Number(e.target.value || 0) || null; saveState(); render(); };
+    }
+    if ($("#bigaPct")) {
+      $("#bigaPct").onchange = (e) => { s.prefermentOptions.biga.bigaPercentTotalFlour = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#bigaHydration")) {
+      $("#bigaHydration").onchange = (e) => { s.prefermentOptions.biga.bigaHydrationPct = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#tigaPct")) {
+      $("#tigaPct").onchange = (e) => { s.prefermentOptions.tiga.tigaPercentTotalFlour = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#hybridHoney")) {
+      $("#hybridHoney").onchange = (e) => { s.prefermentOptions.hybrid.honeyEnabled = e.target.value === "true"; saveState(); render(); };
+    }
+    if ($("#hybridPoolishOverride")) {
+      $("#hybridPoolishOverride").onchange = (e) => { s.prefermentOptions.hybrid.poolishBatchOverride = e.target.value; saveState(); render(); };
+    }
+    if ($("#hybridPoolishCustomFlour")) {
+      $("#hybridPoolishCustomFlour").onchange = (e) => { s.prefermentOptions.hybrid.customPoolishFlourG = Number(e.target.value || 0) || null; saveState(); render(); };
+    }
+    if ($("#hybridBigaPct")) {
+      $("#hybridBigaPct").onchange = (e) => { s.prefermentOptions.hybrid.bigaPercentOfRemainderFlour = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#hybridBigaHydration")) {
+      $("#hybridBigaHydration").onchange = (e) => { s.prefermentOptions.hybrid.bigaHydrationPct = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#starterHydration")) {
+      $("#starterHydration").onchange = (e) => { s.prefermentOptions.sourdough.starterHydrationPct = Number(e.target.value || 100); saveState(); render(); };
+    }
+    if ($("#starterInoculation")) {
+      $("#starterInoculation").onchange = (e) => { s.prefermentOptions.sourdough.inoculationPctFlourBasis = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#yeastAssistToggle")) {
+      $("#yeastAssistToggle").onchange = (e) => { s.prefermentOptions.sourdough.useCommercialYeastAssist = e.target.value === "true"; saveState(); render(); };
+    }
+    if ($("#yeastAssistPct")) {
+      $("#yeastAssistPct").onchange = (e) => { s.prefermentOptions.sourdough.yeastAssistPctIDY = Number(e.target.value || 0); saveState(); render(); };
+    }
 
     bindNumericInput($("#ballWeight"), {
       key: "ballWeight",
-      getValue: () => Number(d.ballWeightG || 260),
-      setValue: (value) => { d.ballWeightG = Math.max(200, value); },
+      getValue: () => Number(s.ballWeightG || 260),
+      setValue: (value) => { s.ballWeightG = Math.max(200, value); },
       min: 200,
+      integer: true,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#ballsUsed"), {
+      key: "ballsUsed",
+      getValue: () => Number(s.ballsUsed || MIN_BALLS),
+      setValue: (value) => { s.ballsUsed = Math.max(1, value); },
+      min: 1,
       integer: true,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#hydration"), {
       key: "hydration",
-      getValue: () => Number(d.hydrationPct || 63),
-      setValue: (value) => { d.hydrationPct = clamp(value, 50, 90); },
+      getValue: () => Number(s.formulaOverrides?.hydrationPct || 63),
+      setValue: (value) => { s.formulaOverrides.hydrationPct = clamp(value, 50, 90); },
       min: 50,
       max: 90,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#salt"), {
       key: "salt",
-      getValue: () => Number(d.saltPct || 2.8),
-      setValue: (value) => { d.saltPct = clamp(value, 1.5, 4); },
+      getValue: () => Number(s.formulaOverrides?.saltPct || 2.8),
+      setValue: (value) => { s.formulaOverrides.saltPct = clamp(value, 1.5, 4); },
       min: 1.5,
       max: 4,
       onCommit: updateSessionOutputs
     });
+    bindNumericInput($("#oil"), {
+      key: "oil",
+      getValue: () => Number(s.formulaOverrides?.oilPct || 0),
+      setValue: (value) => { s.formulaOverrides.oilPct = clamp(value, 0, 10); },
+      min: 0,
+      max: 10,
+      onCommit: updateSessionOutputs
+    });
     bindNumericInput($("#honey"), {
       key: "honey",
-      getValue: () => Number(d.honeyPct || 0),
-      setValue: (value) => { d.honeyPct = clamp(value, 0, 3); },
+      getValue: () => Number(s.formulaOverrides?.honeyPct || 0),
+      setValue: (value) => { s.formulaOverrides.honeyPct = clamp(value, 0, 5); },
+      min: 0,
+      max: 5,
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#malt"), {
+      key: "malt",
+      getValue: () => Number(s.formulaOverrides?.maltPct || 0),
+      setValue: (value) => { s.formulaOverrides.maltPct = clamp(value, 0, 3); },
       min: 0,
       max: 3,
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#yeastPct"), {
       key: "yeastPct",
-      getValue: () => Number(d.yeastPct || 0.05),
-      setValue: (value) => { d.yeastPct = clamp(value, 0, 3); },
+      getValue: () => Number(s.formulaOverrides?.yeastPctIDY || 0.05),
+      setValue: (value) => { s.formulaOverrides.yeastPctIDY = clamp(value, 0, 3); },
       min: 0,
       max: 3,
       onCommit: updateSessionOutputs
     });
+    if ($("#yeastType")) {
+      $("#yeastType").onchange = (e) => { s.formulaOverrides.yeastType = e.target.value; saveState(); render(); };
+    }
 
     bindNumericInput($("#roomC"), {
       key: "roomC",
-      getValue: () => Number(d.temps.roomC || 22),
-      setValue: (value) => { d.temps.roomC = value; },
+      getValue: () => Number(s.temps.roomTempC || 22),
+      setValue: (value) => { s.temps.roomTempC = value; },
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#flourC"), {
       key: "flourC",
-      getValue: () => Number(d.temps.flourC || 22),
-      setValue: (value) => { d.temps.flourC = value; },
+      getValue: () => Number(s.temps.flourTempC || 22),
+      setValue: (value) => { s.temps.flourTempC = value; },
+      onCommit: updateSessionOutputs
+    });
+    bindNumericInput($("#fridgeC"), {
+      key: "fridgeC",
+      getValue: () => Number(s.temps.fridgeTempC || 4),
+      setValue: (value) => { s.temps.fridgeTempC = value; },
       onCommit: updateSessionOutputs
     });
     bindNumericInput($("#ddtC"), {
       key: "ddtC",
-      getValue: () => Number(d.temps.targetDDTC || 23),
-      setValue: (value) => { d.temps.targetDDTC = value; },
+      getValue: () => Number(s.temperaturePlanning?.targetDDTC || 23),
+      setValue: (value) => { s.temperaturePlanning.targetDDTC = value; },
       onCommit: updateSessionOutputs
     });
+
+    if ($("#existingSource")) {
+      $("#existingSource").onchange = (e) => { s.existingDough.source = e.target.value; saveState(); render(); };
+    }
+    if ($("#existingFrozenState")) {
+      $("#existingFrozenState").onchange = (e) => { s.existingDough.frozenState = e.target.value; saveState(); render(); };
+    }
+    if ($("#existingPackaging")) {
+      $("#existingPackaging").onchange = (e) => { s.existingDough.packaging = e.target.value; saveState(); render(); };
+    }
+    if ($("#existingThawLoc")) {
+      $("#existingThawLoc").onchange = (e) => { s.existingDough.thawLocation = e.target.value; saveState(); render(); };
+    }
+    if ($("#existingBalls")) {
+      $("#existingBalls").onchange = (e) => { s.existingDough.ballsUsed = Number(e.target.value || 0); saveState(); render(); };
+    }
+    if ($("#existingBallWeight")) {
+      $("#existingBallWeight").onchange = (e) => { s.existingDough.ballWeightG = Number(e.target.value || 0); saveState(); render(); };
+    }
   }
   function renderPizzaToppingsMini(pz, preset) {
     const tops =
@@ -1283,14 +1807,6 @@ function normalizeFermentationHours(hours, prefermentType) {
       ${group("Split", split)}
     `;
   }
-const ps = $("#ovenProgramSelect");
-if (ps) {
-  ps.onchange = (e) => {
-    STATE.ovenProgramId = e.target.value;
-    saveState();
-    render();
-  };
-}
 
   function openToppingsEditor(personId, pizzaId) {
     const person = STATE.orders.find((p) => p.id === personId);
@@ -1359,9 +1875,9 @@ if (ps) {
     render();
   }
 function getDoughAllowedFormats() {
-  const d = STATE.dough || {};
-  const methodId = String(d.methodId || "").toLowerCase();
-  const pref = String(d.prefermentType || "direct").toLowerCase();
+  const s = STATE.session || {};
+  const methodId = String(s.doughMethodId || s.doughPresetId || "").toLowerCase();
+  const pref = String(s.prefermentType || "NONE").toLowerCase();
 
   // Default = permissive if unknown (so you don't brick the app while building)
   let allowed = new Set(["neapolitan", "calzone", "panzerotti", "teglia", "focaccia", "dessert", "custom"]);
@@ -1628,9 +2144,9 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
     const dough = computeDough();
     const ballsUsed = ensureMinimumBallLogic();
     const toppingTotals = computeToppingTotals();
-    const flourType = flourTypeForDough(STATE.dough);
+    const flourType = flourTypeForDough(STATE.session);
     const flourItems = new Map();
-    const yeastLabel = yeastTypeLabel(STATE.dough?.yeastType);
+    const yeastLabel = yeastTypeLabel(STATE.session?.formulaOverrides?.yeastType);
 
     const addFlourItem = (label, amount) => {
       if (!amount) return;
@@ -1647,7 +2163,7 @@ const presetsAllowed = presetsAll.filter(isPresetAllowedByDough);
 
     root.innerHTML = `
       <div class="card">
-        <h3>Dough (for ${ballsUsed} ball(s) × ${STATE.dough.ballWeightG}g)</h3>
+        <h3>Dough (for ${ballsUsed} ball(s) × ${STATE.session.ballWeightG}g)</h3>
         <ul>
           ${flourList}
           <li><strong>Water</strong> — ${dough.waterG} g</li>
@@ -1703,83 +2219,18 @@ function pickTruthy(obj) {
 // Derive the same timeline inputs your making planner uses.
 // This avoids relying on internal locals that disappear after buildMakingCards().
 function computeTimelineInputs() {
-  const d = STATE.dough || {};
-  const ov = (STATE.ovens || []).find(o => o.id === STATE.ovenId) || null;
-
-  const envLegacy = d.bakeEnvironment || "";
-  const pref = d.prefermentType || "direct";
-  const hoursTotal = normalizeFermentationHours(d.fermentationHours, pref);
-  const loc = d.fermentationLocation || "cold";
-
-  const preheatMin =
-    ov?.preheat?.preheat_target_minutes != null
-      ? clamp(Number(ov.preheat.preheat_target_minutes), 0, 240)
-      : (ov?.fuelType === "wood" || envLegacy === "wfo")
-        ? 90
-        : 30;
-
-  const benchMin = pref === "sourdough" ? 120 : 90;
-  const bulkMin = loc === "room" ? 180 : loc === "double" ? 120 : 60;
-
-  const mixerId = STATE.mixerId || d.mixingMethod || "hand";
-  const mixMin =
-    (mixerId === "halo" || mixerId === "planetary") ? 12 :
-    (mixerId === "spiral") ? 10 :
-    16;
-
-  const coldHours =
-    loc === "cold"
-      ? Math.max(0, hoursTotal - 4)
-      : loc === "hybrid"
-        ? Math.max(0, hoursTotal - 6)
-        : loc === "double"
-          ? Math.max(0, hoursTotal - 8)
-          : Math.max(0, hoursTotal - 6);
-
-  const prefermentLeadH =
-    pref === "poolish" ? Math.min(16, Math.max(8, hoursTotal * 0.5)) :
-    pref === "biga" ? Math.min(18, Math.max(10, hoursTotal * 0.6)) :
-    pref === "sourdough" ? Math.min(10, Math.max(6, hoursTotal * 0.35)) :
-    0;
-
+  const plan = getPlan();
   return {
-    ovenId: STATE.ovenId || null,
-    envLegacy,
-    prefermentType: pref,
-    fermentationLocation: loc,
-    fermentationHours: hoursTotal,
-    preheatMin,
-    benchMin,
-    bulkMin,
-    mixMin,
-    coldHours,
-    prefermentLeadH
+    ovenId: STATE.session?.oven_id || null,
+    ovenProgramId: STATE.session?.oven_program_id || null,
+    timelineBlocks: plan.timelineBlocks || [],
+    warnings: plan.warnings || []
   };
 }
 
 function getCanonicalInputsState() {
-  const d = STATE.dough || {};
   return {
-    ovenId: STATE.ovenId || null,
-    ovenProgramId: STATE.ovenProgramId || null,
-    mixerId: STATE.mixerId || null,
-      dough: {
-        methodId: d.methodId,
-        plannedEat: d.plannedEat,
-        bakeEnvironment: d.bakeEnvironment,
-        mixingMethod: d.mixingMethod,
-        yeastType: d.yeastType,
-        yeastPct: d.yeastPct,
-        fermentationLocation: d.fermentationLocation,
-      fermentationHours: d.fermentationHours,
-      prefermentType: d.prefermentType,
-      prefermentPct: d.prefermentPct,
-      hydrationPct: d.hydrationPct,
-      saltPct: d.saltPct,
-      honeyPct: d.honeyPct,
-      ballWeightG: d.ballWeightG,
-      temps: d.temps
-    },
+    session: deepClone(STATE.session || {}),
     orders: deepClone(STATE.orders || []),
     making: deepClone(STATE.making || {})
   };
@@ -1800,41 +2251,36 @@ function getDerivedOutputsSummary() {
 
 function validateState() {
   const errors = [];
-  const d = STATE.dough || {};
-  const planned = parseDTLocal(d.plannedEat);
+  const s = STATE.session || {};
+  const planned = parseDTLocal(s.plannedEatTimeISO);
 
   if (!planned) errors.push("Planned time to eat is missing or invalid.");
-  if (!STATE.ovenId) errors.push("Oven selection is missing.");
+  if (!s.oven_id) errors.push("Oven selection is missing.");
 
-  const hydration = Number(d.hydrationPct);
+  const hydration = Number(s.formulaOverrides?.hydrationPct);
   if (!isFinite(hydration) || hydration < 50 || hydration > 90) {
     errors.push("Hydration % must be between 50 and 90.");
   }
 
-  const salt = Number(d.saltPct);
+  const salt = Number(s.formulaOverrides?.saltPct);
   if (!isFinite(salt) || salt < 1.5 || salt > 4) {
     errors.push("Salt % must be between 1.5 and 4.");
   }
 
-  const honey = Number(d.honeyPct);
+  const honey = Number(s.formulaOverrides?.honeyPct);
   if (!isFinite(honey) || honey < 0 || honey > 3) {
     errors.push("Honey % must be between 0 and 3.");
   }
 
-  const ballWeight = Number(d.ballWeightG);
+  const ballWeight = Number(s.ballWeightG);
   if (!isFinite(ballWeight) || ballWeight < 200) {
     errors.push("Ball weight must be at least 200g.");
   }
 
-  const fermHours = Number(d.fermentationHours);
-  const fermOptions = getFermentationHourOptions(d.prefermentType);
+  const fermHours = Number(s.totalFermentationHours);
+  const fermOptions = getFermentationHourOptions(s.prefermentType);
   if (!isFinite(fermHours) || !fermOptions.includes(fermHours)) {
     errors.push(`Fermentation hours must be ${fermOptions.join(", ")}.`);
-  }
-
-  const prefPct = Number(d.prefermentPct);
-  if (!isFinite(prefPct) || prefPct < 0 || prefPct > 100) {
-    errors.push("Preferment % must be between 0 and 100.");
   }
 
   (STATE.orders || []).forEach((person, personIndex) => {
@@ -1950,10 +2396,10 @@ function renderDebug() {
 
 
   function buildMakingCards() {
-  const d = STATE.dough;
-  const eat = parseDTLocal(d.plannedEat);
+  const plan = getPlan();
+  const timeline = plan.timelineBlocks || [];
 
-  if (!eat) {
+  if (!timeline.length) {
     return [{
       title: "Set an anchor time",
       subtitle: "Your timeline needs a valid Planned time to eat.",
@@ -1961,191 +2407,16 @@ function renderDebug() {
     }];
   }
 
-  // --- Oven-aware timeline inputs (backward compatible) ---
-  const ov = (STATE.ovens || []).find(o => o.id === STATE.ovenId) || null;
+  const items = timeline.map((block) => ({
+    time: isoToLocalInput(block.startISO).replace("T", " "),
+    text: block.label
+  }));
 
-  // Keep old env string as fallback for legacy state + existing copy
-  const envLegacy = d.bakeEnvironment; // "wfo" | "breville" | (maybe others)
-  const prog = getSelectedOvenProgram(ov);
-  const programNotes = Array.isArray(prog?.notes_md) ? prog.notes_md.join(" ") : "";
-  const pref = d.prefermentType;
-  const hoursTotal = normalizeFermentationHours(d.fermentationHours, pref);
-  const loc = d.fermentationLocation;
-
-  // Determine oven category safely (THIS FIXES YOUR "env is not defined" CRASH)
-  const isWoodFired = (ov?.fuelType === "wood") || (envLegacy === "wfo") || String(STATE.ovenId || "").includes("wfo");
-  const isBreville = String(STATE.ovenId || "").includes("breville") || (envLegacy === "breville");
-
-  // Preheat:
-  // 1) If oven config has preheat_target_minutes, use it.
-  // 2) Else if wood-fired, use 90.
-  // 3) Else use 30.
-  const preheatMin =
-    (ov?.preheat?.preheat_target_minutes != null)
-      ? clamp(Number(ov.preheat.preheat_target_minutes), 0, 240)
-      : (isWoodFired ? 90 : 30);
-
-  // Bench rest / temper window
-  const benchMin = pref === "sourdough" ? 120 : 90;
-
-  // Bulk rest
-  const bulkMin = loc === "room" ? 180 : loc === "double" ? 120 : 60;
-
-  // Mix time: prefer actual mixer selection if you have it, else fall back to legacy mixingMethod
-  const mixerId = STATE.mixerId || d.mixingMethod;
-  const mixMin =
-    (mixerId === "halo" || mixerId === "planetary") ? 12 :
-    (mixerId === "spiral") ? 10 :
-    16;
-
-  // Cold hours logic (kept from your original)
-  const coldHours =
-    loc === "cold"
-      ? Math.max(0, hoursTotal - 4)
-      : loc === "hybrid"
-        ? Math.max(0, hoursTotal - 6)
-        : loc === "double"
-          ? Math.max(0, hoursTotal - 8)
-          : Math.max(0, hoursTotal - 6);
-
-  // Preferment lead estimate (kept from your original)
-  const prefermentLeadH =
-    pref === "poolish" ? Math.min(16, Math.max(8, hoursTotal * 0.5)) :
-    pref === "biga" ? Math.min(18, Math.max(10, hoursTotal * 0.6)) :
-    pref === "sourdough" ? Math.min(10, Math.max(6, hoursTotal * 0.35)) :
-    0;
-
-  const steps = [];
-
-  const fmt = (dt) => {
-    const pad = (x) => String(x).padStart(2, "0");
-    const y = dt.getFullYear();
-    const m = pad(dt.getMonth() + 1);
-    const dd = pad(dt.getDate());
-    const hh = pad(dt.getHours());
-    const mm = pad(dt.getMinutes());
-    return `${y}-${m}-${dd} ${hh}:${mm}`;
-  };
-
-  let t = new Date(eat.getTime());
-
-  steps.push({
-    phase: "Bake & Serve",
-    time: fmt(t),
-    text: "Serve. Finish with after-bake toppings (basil, oil, parmesan). Eat hot."
-  });
-
-  t = new Date(t.getTime() - 25 * 60 * 1000);
-  steps.push({
-    phase: "Bake & Serve",
-    time: fmt(t),
-    text: "Bake window: run a steady cadence. Dress fast, launch consistently."
-  });
-
-  t = new Date(t.getTime() - preheatMin * 60 * 1000);
-  steps.push({
-    phase: "Bake & Serve",
-    time: fmt(t),
-    text: isWoodFired
-      ? "Light and stabilize the oven. You want repeatable bakes, not a single heat spike."
-      : (isBreville
-          ? "Preheat Breville fully. Saturate the stone/plate; short preheat gives pale bottoms."
-          : "Preheat oven/steel fully. Let the steel saturate; insufficient preheat gives weak spring.")
-  });
-
-  t = new Date(t.getTime() - benchMin * 60 * 1000);
-  steps.push({
-    phase: "Dough Handling",
-    time: fmt(t),
-    text: "Temper dough to workable. Dough should be extensible, not cold and tight."
-  });
-
-  t = new Date(t.getTime() - 20 * 60 * 1000);
-  steps.push({
-    phase: "Dough Handling",
-    time: fmt(t),
-    text: "Ball dough (or re-ball gently). Aim for smooth surface tension."
-  });
-
-  t = new Date(t.getTime() - coldHours * 60 * 60 * 1000);
-  steps.push({
-    phase: "Fermentation",
-    time: fmt(t),
-    text: loc === "cold"
-      ? "Cold ferment begins. Cover well. This is your predictability phase."
-      : loc === "hybrid"
-        ? "Move to cold to slow and control. Flavor builds while schedule stabilizes."
-        : loc === "double"
-          ? "Move to cold for the mid-phase. Plan a final room-temp window before bake."
-          : "Optional short cold rest if needed for handling."
-  });
-
-  t = new Date(t.getTime() - bulkMin * 60 * 1000);
-  steps.push({
-    phase: "Fermentation",
-    time: fmt(t),
-    text: "Bulk fermentation / rest. If dough races, shorten bulk and move to cold earlier next time."
-  });
-
-  t = new Date(t.getTime() - mixMin * 60 * 1000);
-  steps.push({
-    phase: "Mixing",
-    time: fmt(t),
-    text: (d.mixingMethod === "halo" || mixerId === "halo" || mixerId === "planetary")
-      ? `Halo mix: water first, then flour. Add salt after initial incorporation. Target DDT ${d.temps?.targetDDTC ?? 23}°C.`
-      : `Hand mix: shaggy → rest → salt → smooth. Target DDT ${d.temps?.targetDDTC ?? 23}°C.`
-  });
-
-  if (pref !== "direct") {
-    t = new Date(t.getTime() - prefermentLeadH * 60 * 60 * 1000);
-
-    const label =
-      pref === "poolish" ? "Build poolish" :
-      pref === "biga" ? "Build biga" :
-      "Prepare starter/levain";
-
-    const detail =
-      pref === "poolish"
-        ? "Mix smooth. Ripen until domed and bubbly (peaking, not collapsed)."
-        : pref === "biga"
-          ? "Mix stiff. Keep it coarse. Mature until aromatic and slightly expanded."
-          : "Feed starter so it peaks at mix time. Peak matters more than the clock.";
-
-    steps.push({
-      phase: "Preferment / Starter",
-      time: fmt(t),
-      text: `${label}. ${detail}`
-    });
-  }
-
-  const phases = ["Preferment / Starter", "Mixing", "Fermentation", "Dough Handling", "Bake & Serve"];
-
-  return phases
-    .map((ph) => {
-      const items = steps
-        .filter((s) => s.phase === ph)
-        .map((s) => ({ time: s.time, text: s.text }));
-
-      if (ph === "Bake & Serve" && programNotes) {
-        items.unshift({ time: "Final prep", text: `Setting notes: ${programNotes}` });
-      }
-
-      return {
-        title: ph,
-        subtitle:
-          ph === "Preferment / Starter"
-            ? "Flavor and structure start here."
-            : ph === "Mixing"
-              ? "Get development without overheating."
-              : ph === "Fermentation"
-                ? "Time + temperature = predictability."
-                : ph === "Dough Handling"
-                  ? "Gentle handling preserves air."
-                  : "Cadence and consistency win.",
-        items
-      };
-    })
-    .filter((card) => card.items.length > 0);
+  return [{
+    title: "Master Timeline (from plan)",
+    subtitle: "Scheduled backward from your planned eat time.",
+    items
+  }];
 }
 /* ============================================================
    PIZZA MAKING — GUIDE ENGINE (Secret Sauce)
@@ -2169,14 +2440,12 @@ function minutesToHuman(min) {
 
 function isWoodFiredSelected() {
   const ov = getSelectedOven();
-  const envLegacy = STATE.dough?.bakeEnvironment;
-  return (ov?.fuelType === "wood") || envLegacy === "wfo" || String(STATE.ovenId || "").includes("wfo");
+  return (ov?.fuelType === "wood") || String(STATE.session?.oven_id || "").includes("wfo");
 }
 
 function isBrevilleSelected() {
   const ov = getSelectedOven();
-  const envLegacy = STATE.dough?.bakeEnvironment;
-  return (ov?.id || "").includes("breville") || (ov?.label || "").toLowerCase().includes("breville") || envLegacy === "breville";
+  return (ov?.id || "").includes("breville") || (ov?.label || "").toLowerCase().includes("breville");
 }
 
 function getDominantOrderFormat() {
@@ -2223,28 +2492,29 @@ function formatOrderFormatLabel(format) {
 function formatFermentationLocationLabel(loc) {
   const key = String(loc || "").toLowerCase();
   const map = {
-    cold: "Cold",
+    fridge: "Cold",
     room: "Room",
-    hybrid: "Hybrid",
-    double: "Double"
+    hybrid: "Hybrid"
   };
   return map[key] || "—";
 }
 
 function formatPrefermentLabel(prefType) {
-  const pref = String(prefType || "direct").toLowerCase();
+  const pref = String(prefType || "NONE").toLowerCase();
+  if (pref === "none") return "Direct";
   if (pref === "poolish") return "Poolish";
   if (pref === "biga") return "Biga";
+  if (pref === "tiga") return "Tiga";
+  if (pref === "poolish_biga_hybrid") return "Hybrid";
   if (pref === "sourdough") return "Starter";
-  if (pref === "direct") return "Direct";
   return pref.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function buildSessionSnapshot() {
-  const d = STATE.dough || {};
+  const d = STATE.session || {};
   const ov = getSelectedOven();
   const prog = getSelectedOvenProgram(ov);
-  const method = getMethod(d.methodId);
+  const method = getMethod(d.doughMethodId);
 
   const tempTargets = prog?.temp_targets_f && typeof prog.temp_targets_f === "object"
     ? prog.temp_targets_f
@@ -2253,7 +2523,7 @@ function buildSessionSnapshot() {
   const floorRange = formatTempRangeF(tempTargets.deck);
 
   const prefLabel = formatPrefermentLabel(d.prefermentType);
-  const fermHours = normalizeFermentationHours(d.fermentationHours, d.prefermentType);
+  const fermHours = normalizeFermentationHours(d.totalFermentationHours, d.prefermentType);
   const hoursLabel = Number.isFinite(fermHours) ? `${fermHours}h` : "—";
   const locationLabel = formatFermentationLocationLabel(d.fermentationLocation);
   const methodLabel = method?.label || "—";
@@ -2266,19 +2536,17 @@ function buildSessionSnapshot() {
   const showBallWeight = !["teglia", "focaccia"].includes(String(format || "").toLowerCase());
   const styleLine = showBallWeight ? `${styleLabel} • ${ballWeightLabel}` : styleLabel;
 
-  const timeline = computeTimelineInputs();
-  const fermLoc = timeline?.fermentationLocation || d.fermentationLocation || "cold";
-  const fermTotal = Number(timeline?.fermentationHours ?? d.fermentationHours);
+  const fermLoc = d.fermentationLocation || "FRIDGE";
+  const fermTotal = Number(d.totalFermentationHours);
   let fermentationStatus = "—";
-  if (fermLoc === "cold") fermentationStatus = "Cold fermented • Ready to bake";
-  else if (fermLoc === "hybrid") fermentationStatus = "Hybrid ferment • Tempering now";
-  else if (fermLoc === "double") fermentationStatus = "Double ferment • Final proof";
+  if (String(fermLoc).toUpperCase() === "FRIDGE") fermentationStatus = "Cold fermented • Ready to bake";
+  else if (String(fermLoc).toUpperCase() === "HYBRID") fermentationStatus = "Hybrid ferment • Tempering now";
   else if (Number.isFinite(fermTotal) && fermTotal <= 10) fermentationStatus = "Same-day dough • Time-sensitive";
-  else if (fermLoc === "room") fermentationStatus = "Room ferment • Bake same day";
+  else if (String(fermLoc).toUpperCase() === "ROOM") fermentationStatus = "Room ferment • Bake same day";
 
-  const honeyPct = Number(d.honeyPct || 0);
-  const hydrationPct = Number(d.hydrationPct || 0);
-  const prefType = String(d.prefermentType || "direct").toLowerCase();
+  const honeyPct = Number(d.formulaOverrides?.honeyPct || 0);
+  const hydrationPct = Number(d.formulaOverrides?.hydrationPct || 0);
+  const prefType = String(d.prefermentType || "NONE").toLowerCase();
   const handlingNote = honeyPct > 0
     ? "Faster browning expected"
     : hydrationPct >= 70
@@ -2328,13 +2596,13 @@ function buildSessionSnapshot() {
   `;
 }
 function flourSpecForDough(d) {
-  const pref = d.prefermentType;
-  const hours = normalizeFermentationHours(d.fermentationHours, pref);
-  const hyd = Number(d.hydrationPct || 63);
+  const pref = d.prefermentType || "NONE";
+  const hours = normalizeFermentationHours(d.totalFermentationHours ?? d.fermentationHours, pref);
+  const hyd = Number(d.formulaOverrides?.hydrationPct ?? d.hydrationPct ?? 63);
   const isCold =
-    d.fermentationLocation === "cold" ||
-    d.fermentationLocation === "hybrid" ||
-    d.fermentationLocation === "double";
+    d.fermentationLocation === "FRIDGE" ||
+    d.fermentationLocation === "HYBRID" ||
+    d.fermentationMode === "DOUBLE";
 
   // Base assumptions
   let wMin = 260, wMax = 300;
@@ -2412,8 +2680,7 @@ function buildShoppingAdvisories() {
   const advisories = [];
 
   // Flour spec
-  const d = STATE.dough;
-  const flourSpec = flourSpecForDough(d);
+  const flourSpec = flourSpecForDough(STATE.session || {});
   advisories.push(flourSpec.shoppingAdvisory);
 
   // Oven-related advisory example (optional)
@@ -2455,32 +2722,24 @@ function flourStrengthGuidance(prefermentType, style) {
 
 // --- Core: compute “facts” the guide will use ---
 function computeGuideFacts() {
-  const d = STATE.dough;
+  const d = STATE.session || {};
+  const plan = getPlan();
   const ov = getSelectedOven();
   const prog = getSelectedOvenProgram(ov);
   const dough = computeDough();
   const style = getDominantOrderFormat();
   const waterRec = recommendWaterTempC();
 
-  const ingredientBreakdown = PizzaCalc.computeIngredientBreakdown({
-    totals: {
-      flour: dough.flourG,
-      water: dough.waterG,
-      salt: dough.saltG,
-      honey: dough.honeyG,
-      yeast: dough.yeastG
-    },
-    prefermentType: d.prefermentType || "direct",
-    prefermentPct: Number(d.prefermentPct || 0)
-  });
+  const ingredientBreakdown = plan.ingredients;
 
   // Preferment split (flour-based)
-  const prefType = ingredientBreakdown.preferment.type;
-  const prefPct = clamp(Number(d.prefermentPct || 0), 0, 100) / 100;
-  const prefFlourG = ingredientBreakdown.preferment.flour;
-  const finalFlourG = ingredientBreakdown.finalMix.flour;
-  const prefWaterG = ingredientBreakdown.preferment.water;
-  const finalWaterG = ingredientBreakdown.finalMix.water;
+  const prefType = ingredientBreakdown?.preferment?.type || "NONE";
+  const totalFlour = Number(ingredientBreakdown?.totals?.flourG || 0);
+  const prefFlourG = Number(ingredientBreakdown?.preferment?.flourG || 0);
+  const prefPct = totalFlour ? prefFlourG / totalFlour : 0;
+  const finalFlourG = Number(ingredientBreakdown?.finalMix?.flourG || 0);
+  const prefWaterG = Number(ingredientBreakdown?.preferment?.waterG || 0);
+  const finalWaterG = Number(ingredientBreakdown?.finalMix?.waterG || 0);
 
   // Oven cues
   const wood = isWoodFiredSelected();
@@ -2504,12 +2763,12 @@ function computeGuideFacts() {
     finalWaterG,
     ingredientBreakdown,
 
-    fermentationHours: normalizeFermentationHours(d.fermentationHours, d.prefermentType),
-    fermentationLocation: d.fermentationLocation || "cold",
-    mixingMethod: d.mixingMethod || "hand",
-    targetDDTC: Number(d.temps?.targetDDTC ?? 23),
-    roomC: Number(d.temps?.roomC ?? 22),
-    flourC: Number(d.temps?.flourC ?? 22),
+    fermentationHours: normalizeFermentationHours(d.totalFermentationHours, d.prefermentType),
+    fermentationLocation: d.fermentationLocation || "FRIDGE",
+    mixingMethod: plan.mixerProfile?.mixer?.type || d.mixer_id || "hand",
+    targetDDTC: Number(d.temperaturePlanning?.targetDDTC ?? 23),
+    roomC: Number(d.temps?.roomTempC ?? 22),
+    flourC: Number(d.temps?.flourTempC ?? 22),
     bakeSec
   };
 }
@@ -2524,7 +2783,7 @@ function chapter(title, subtitle, steps, warnings = []) {
 
 // --- Chapter generators ---
 function chapterOverview(f) {
-  const d = STATE.dough;
+  const d = STATE.session || {};
   const pizzaCount = totalPizzasFromOrders();
   const ballsUsed = ensureMinimumBallLogic();
 
@@ -2694,7 +2953,7 @@ function chapterMixing(f) {
     "Add salt after initial incorporation (or after short rest). Salt tightens gluten; adding too early can slow hydration and make mixing harder."
   ));
 
-  if (Number(STATE.dough.honeyPct || 0) > 0) {
+  if (Number(STATE.session?.formulaOverrides?.honeyPct || 0) > 0) {
     steps.push(step(
       "Honey (optional)",
       "Add honey with water (it dissolves more cleanly). Honey can enhance browning, especially in home ovens; watch color in high-heat WFO."
@@ -2710,7 +2969,7 @@ function chapterMixing(f) {
 }
 
 function chapterFermentationAndBalling(f) {
-  const d = STATE.dough;
+  const d = STATE.session || {};
   const steps = [];
 
   steps.push(step(
@@ -2719,19 +2978,20 @@ function chapterFermentationAndBalling(f) {
     "Remember: time + temperature = fermentation speed."
   ));
 
-  if (f.fermentationLocation === "cold") {
+  const fermLoc = String(f.fermentationLocation || "").toUpperCase();
+  if (fermLoc === "FRIDGE") {
     steps.push(step(
       "Cold fermentation (predictability mode)",
       "After mixing, rest briefly at room temp if desired, then refrigerate well covered. " +
       "Cold gives schedule control; flavor develops slowly."
     ));
-  } else if (f.fermentationLocation === "hybrid") {
+  } else if (fermLoc === "HYBRID") {
     steps.push(step(
       "Hybrid fermentation",
       "Start at room temp to wake the dough, then move cold to stabilize. " +
       "Use this when you want activity plus scheduling reliability."
     ));
-  } else if (f.fermentationLocation === "double") {
+  } else if (fermLoc === "DOUBLE") {
     steps.push(step(
       "Double fermentation",
       "Start at room temp for activity, move cold for flavor and control, then finish at room temp so the dough is bake-ready."
@@ -2858,9 +3118,52 @@ function buildPizzaMakingGuide() {
 
 function renderMaking() {
   const root = $("#tab-making");
+  const plan = getPlan();
+  const timeline = plan.timelineBlocks || [];
+  const ingredients = plan.ingredients;
+  const oven = plan.ovenProfile?.oven;
+  const program = plan.ovenProfile?.program;
+
+  const timelineItems = timeline.length
+    ? timeline.map((block) => `
+        <li><strong>${escapeHtml(block.label)}</strong> — ${escapeHtml(isoToLocalInput(block.startISO).replace("T", " "))}</li>
+      `).join("")
+    : "<li>No timeline available. Check your planned eat time.</li>";
+
+  root.innerHTML = `
+    <div class="card">
+      <h2>Pizzaiolo Plan</h2>
+      <div class="small">Derived from your Session selections.</div>
+    </div>
+
+    <div class="card">
+      <h3>Equipment</h3>
+      <div class="small">Oven: ${escapeHtml(oven?.label || oven?.id || "—")}</div>
+      <div class="small">Program: ${escapeHtml(program?.display_name || program?.id || "—")}</div>
+    </div>
+
+    <div class="card">
+      <h3>Timeline</h3>
+      <ul>${timelineItems}</ul>
+    </div>
+
+    <div class="card">
+      <h3>Ingredient Totals</h3>
+      ${ingredients ? `
+        <div class="kpi">
+          <div class="box"><div class="small">Flour</div><div class="v">${ingredients.totals.flourG} g</div></div>
+          <div class="box"><div class="small">Water</div><div class="v">${ingredients.totals.waterG} g</div></div>
+          <div class="box"><div class="small">Salt</div><div class="v">${ingredients.totals.saltG} g</div></div>
+          <div class="box"><div class="small">Honey</div><div class="v">${ingredients.totals.honeyG} g</div></div>
+          <div class="box"><div class="small">Yeast</div><div class="v">${ingredients.totals.yeastG} g</div></div>
+        </div>
+      ` : `<div class="small">Using existing dough; ingredient totals are not computed.</div>`}
+    </div>
+  `;
+  return;
   const cards = buildMakingCards();
 
-  const d = STATE.dough;
+  const d = STATE.session || {};
   const dough = computeDough();
   const ingredientBreakdown = PizzaCalc.computeIngredientBreakdown({
     totals: {
@@ -3151,8 +3454,8 @@ function renderMaking() {
 
   bindNumericInput($("#mk_targetDDT"), {
     key: "mk_targetDDT",
-    getValue: () => Number(STATE.dough.temps?.targetDDTC ?? 23),
-    setValue: (value) => { STATE.dough.temps.targetDDTC = value; },
+    getValue: () => Number(STATE.session?.temperaturePlanning?.targetDDTC ?? 23),
+    setValue: (value) => { if (STATE.session) STATE.session.temperaturePlanning.targetDDTC = value; },
     onCommit: () => {
       updateSessionOutputs();
       updateMakingOutputs();
@@ -3390,7 +3693,7 @@ function renderMaking() {
 
   async function boot() {
     loadState();
-    if (!STATE || !STATE.dough) STATE = defaultState();
+    if (!STATE || !STATE.session) STATE = defaultState();
 
     const params = new URLSearchParams(window.location.search);
     const debugParam = params.get("debug");
@@ -3438,7 +3741,7 @@ function renderMaking() {
       }
     });
 
-        // Load configs from JSON BEFORE first render
+    // Load configs from JSON BEFORE first render
     try {
       await loadDoughPresets();
     } catch (err) {
@@ -3448,7 +3751,17 @@ function renderMaking() {
         "Preset load failed",
         `Could not load ${CONFIG_PATHS.doughPresets}. Open Console + verify URL works. (${err.message})`
       );
-      // Keep running with fallback BASE_DOUGH_METHODS
+    }
+
+    try {
+      await loadDoughMethods();
+    } catch (err) {
+      console.error("Dough methods load failed:", err);
+      setBanner(
+        "warn",
+        "Methods load failed",
+        `Could not load ${CONFIG_PATHS.doughMethods}. Using built-in fallback. (${err.message})`
+      );
     }
 
     try {
@@ -3460,24 +3773,24 @@ function renderMaking() {
         "Mixers load failed",
         `Could not load ${CONFIG_PATHS.mixers}. Using built-in fallback. (${err.message})`
       );
-      // Keep running with fallback mixers
     }
-try {
-  await loadOvens();
-} catch (err) {
-  console.error("Ovens load failed:", err);
-  setBanner(
-    "warn",
-    "Ovens load failed",
-    `Could not load ${CONFIG_PATHS.ovens}. Using built-in fallback. (${err.message})`
-  );
-}
-console.log("OVENS DEBUG:", {
-  path: CONFIG_PATHS.ovens,
-  ovensCount: STATE.ovens?.length,
-  ovenIds: (STATE.ovens || []).map(o => o.id),
-  first: STATE.ovens?.[0]
-});
+
+    try {
+      await loadOvens();
+    } catch (err) {
+      console.error("Ovens load failed:", err);
+      setBanner(
+        "warn",
+        "Ovens load failed",
+        `Could not load ${CONFIG_PATHS.ovens}. Using built-in fallback. (${err.message})`
+      );
+    }
+
+    try {
+      await loadToppings();
+    } catch (err) {
+      console.error("Toppings load failed:", err);
+    }
 
     saveState();
 

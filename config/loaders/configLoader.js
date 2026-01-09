@@ -61,7 +61,7 @@
    * @param {Array}  opts.fallback - already-normalized fallback array
    * @returns {Promise<Array>} normalized presets array
    */
-  async function loadDoughMethods({ path, fallback }) {
+  async function loadDoughPresets({ path, fallback }) {
     let json;
     try {
       json = await fetchJson(path);
@@ -79,15 +79,48 @@
 
     return cleaned.length ? cleaned : (Array.isArray(fallback) && fallback.length ? fallback : []);
   }
+
+  function normalizeDoughMethod(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    if (!raw.id || !(raw.display_name || raw.label)) return null;
+    return {
+      id: String(raw.id),
+      label: String(raw.display_name || raw.label),
+      category: String(raw.category || ""),
+      supports: raw.supports && typeof raw.supports === "object" ? raw.supports : {},
+      phases: Array.isArray(raw.phases) ? raw.phases : [],
+      notes: notesMdToString(raw.notes_md || raw.notesMd || [])
+    };
+  }
+
+  async function loadDoughMethods({ path, fallback }) {
+    let json;
+    try {
+      json = await fetchJson(path);
+    } catch (e) {
+      return Array.isArray(fallback) && fallback.length ? fallback : [];
+    }
+
+    const arr =
+      Array.isArray(json) ? json :
+      (json && Array.isArray(json.items) ? json.items :
+      (json && Array.isArray(json.methods) ? json.methods : null));
+
+    if (!arr) return Array.isArray(fallback) && fallback.length ? fallback : [];
+
+    const cleaned = arr.map(normalizeDoughMethod).filter(Boolean);
+    return cleaned.length ? cleaned : (Array.isArray(fallback) && fallback.length ? fallback : []);
+  }
 function normalizeMixer(raw) {
   if (!raw || typeof raw !== "object") return null;
-  if (!raw.id || !raw.label) return null;
+  if (!raw.id || !(raw.display_name || raw.label)) return null;
   return {
     id: String(raw.id),
-    label: String(raw.label),
-    type: String(raw.type || "hand"),
+    label: String(raw.display_name || raw.label),
+    type: String(raw.mixer_class || raw.type || "hand"),
+    frictionFactorRangeC: Array.isArray(raw.friction_factor_c_range) ? raw.friction_factor_c_range.map(Number) : null,
     bowlCapacityG: raw.bowlCapacityG != null ? Number(raw.bowlCapacityG) : null,
-    notes: String(raw.notes || "")
+    notes: notesMdToString(raw.notes_md || raw.notes || [])
   };
 }
 function fToC(f) {
@@ -209,13 +242,48 @@ async function loadOvens({ path, fallback }) {
   return cleaned.length ? cleaned : (Array.isArray(fallback) && fallback.length ? fallback : []);
 }
 
+async function loadToppings({ path, fallback }) {
+  let json;
+  try {
+    json = await fetchJson(path);
+  } catch (e) {
+    return Array.isArray(fallback) && fallback.length ? fallback : [];
+  }
+
+  const arr =
+    Array.isArray(json) ? json :
+    (json && Array.isArray(json.items) ? json.items :
+    (json && Array.isArray(json.toppings) ? json.toppings : null));
+
+  if (!arr) return Array.isArray(fallback) && fallback.length ? fallback : [];
+
+  return arr.filter((item) => item && item.id);
+}
+
+function getOvenById(ovens, id) {
+  return (ovens || []).find((o) => o.id === id) || null;
+}
+
+function getOvenProgramById(oven, id) {
+  if (!oven || !Array.isArray(oven.programs)) return null;
+  return oven.programs.find((p) => p.id === id) || null;
+}
+
+function getMixerById(mixers, id) {
+  return (mixers || []).find((m) => m.id === id) || null;
+}
 
   // Expose a tiny API
   window.PizzaConfigLoader = {
     fetchJson,
+    loadDoughPresets,
     loadDoughMethods,
     loadMixers,
-    loadOvens
+    loadOvens,
+    loadToppings,
+    getOvenById,
+    getOvenProgramById,
+    getMixerById
   };
 
 
