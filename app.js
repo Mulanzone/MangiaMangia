@@ -699,18 +699,90 @@ const BASE_OVENS_RAW = [
     return window.PizzaConfigLoader.getOvenById(CONFIG.ovens || [], id);
   }
 
+  const PREFERMENT_METHOD_MAP = {
+    NONE: ["direct"],
+    POOLISH: ["poolish"],
+    BIGA: ["biga"],
+    TIGA: ["biga"],
+    POOLISH_BIGA_HYBRID: ["poolish", "biga"],
+    SOURDOUGH: ["sourdough"]
+  };
+
+  function getMethodIdsForPreferment(prefType) {
+    const pref = String(prefType || "NONE").toUpperCase();
+    return PREFERMENT_METHOD_MAP[pref] || [];
+  }
+
+  function resolveMethodIdForPreferment(prefType, fallback) {
+    const ids = getMethodIdsForPreferment(prefType);
+    const available = new Set((CONFIG.doughMethods || []).map((m) => m.id));
+    const resolved = ids.find((id) => available.has(id));
+    return resolved || fallback || (CONFIG.doughMethods || [])[0]?.id || "direct";
+  }
+
+  function getMethodNotesForPreferment(prefType) {
+    const ids = getMethodIdsForPreferment(prefType);
+    const methods = ids.map(getMethod).filter(Boolean);
+    const notes = methods.map((m) => m.notes).filter(Boolean);
+    const labels = methods.map((m) => m.label).filter(Boolean);
+    if (!notes.length) return "";
+    const label = labels.length ? `${labels.join(" + ")}: ` : "";
+    return `${label}${notes.join(" ")}`;
+  }
+
+  function getSessionDefaultsForPreferment(prefType, options = {}) {
+    const defaults = defaultState().session;
+    const current = STATE.session || defaults;
+    const preserved = {
+      plannedEatTimeISO: current.plannedEatTimeISO,
+      timezone: current.timezone,
+      doughModality: current.doughModality,
+      styleId: current.styleId,
+      ballsUsed: current.ballsUsed,
+      ballWeightG: current.ballWeightG,
+      oven_id: current.oven_id,
+      oven_program_id: current.oven_program_id,
+      oven_overrides: current.oven_overrides,
+      mixer_id: current.mixer_id,
+      existingDough: current.existingDough,
+      temps: current.temps
+    };
+
+    return {
+      ...defaults,
+      ...preserved,
+      prefermentType: prefType,
+      fermentationLocation: defaults.fermentationLocation,
+      fermentationMode: defaults.fermentationMode,
+      totalFermentationHours: normalizeFermentationHours(defaults.totalFermentationHours, prefType),
+      formulaOverrides: { ...defaults.formulaOverrides },
+      temperaturePlanning: { ...defaults.temperaturePlanning },
+      prefermentOptions: deepClone(defaults.prefermentOptions),
+      doughMethodId: resolveMethodIdForPreferment(prefType, defaults.doughMethodId),
+      doughPresetId: options.doughPresetId ?? defaults.doughPresetId
+    };
+  }
+
+  function resetSessionForPrefermentType(prefType, options = {}) {
+    STATE.session = getSessionDefaultsForPreferment(prefType, options);
+  }
+
   function applyDoughPreset(presetId) {
     const preset = (CONFIG.doughPresets || []).find((p) => p.id === presetId) || null;
     if (!STATE.session) STATE.session = defaultState().session;
-    STATE.session.doughPresetId = presetId;
 
     if (!preset || presetId === "manual" || !preset.defaults) {
+      STATE.session.doughPresetId = presetId;
       saveState();
       render();
       return;
     }
 
     const def = preset.defaults;
+    const prefType = String(def.prefermentType || "direct");
+    const normalizedPrefType = prefType === "direct" ? "NONE" : prefType.toUpperCase();
+    resetSessionForPrefermentType(normalizedPrefType, { doughPresetId: presetId });
+
     STATE.session.formulaOverrides = {
       ...STATE.session.formulaOverrides,
       hydrationPct: Number(def.hydrationPct ?? STATE.session.formulaOverrides?.hydrationPct ?? 63),
@@ -719,8 +791,7 @@ const BASE_OVENS_RAW = [
       yeastPctIDY: Number(def.yeastPct ?? STATE.session.formulaOverrides?.yeastPctIDY ?? 0.05)
     };
 
-    const prefType = String(def.prefermentType || "direct");
-    STATE.session.prefermentType = prefType === "direct" ? "NONE" : prefType.toUpperCase();
+    STATE.session.prefermentType = normalizedPrefType;
     STATE.session.totalFermentationHours = normalizeFermentationHours(def.fermentationHours, prefType);
     STATE.session.fermentationLocation =
       def.fermentationLocation === "cold" ? "FRIDGE" :
@@ -926,6 +997,7 @@ function normalizeFermentationHours(hours, prefermentType) {
     const pref = String(s.prefermentType || "NONE").toUpperCase();
     const loc = s.fermentationLocation || "ROOM";
     const hours = normalizeFermentationHours(s.totalFermentationHours, pref);
+    const methodNotes = getMethodNotesForPreferment(pref);
 
     const prefCopy =
       pref === "NONE"
@@ -954,7 +1026,7 @@ function normalizeFermentationHours(hours, prefermentType) {
         ? "Cold fermentation: predictable handling and slower flavor build."
         : "Hybrid: start at room temp for activity, then cold for control.";
 
-    return `${prefCopy} ${timeCopy} ${locCopy}`;
+    return `${prefCopy} ${timeCopy} ${locCopy}${methodNotes ? ` ${methodNotes}` : ""}`;
   }
 
   function updateSessionOutputs() {
@@ -1015,7 +1087,6 @@ function normalizeFermentationHours(hours, prefermentType) {
   function renderSession() {
     const root = $("#tab-session");
     const s = STATE.session;
-    const method = getMethod(s.doughMethodId);
     const c = computeDough();
     const plan = getPlan();
     const waterRec = recommendWaterTempC();
@@ -1131,40 +1202,6 @@ function normalizeFermentationHours(hours, prefermentType) {
       </div>
 
       <div class="card">
-        <h3>Dough Method & Preset</h3>
-        <div class="grid-2">
-          <div>
-            <label>Dough method</label>
-            <select id="doughMethodSelect">
-              ${(CONFIG.doughMethods || [])
-                .map(
-                  (m) => `
-                  <option value="${m.id}" ${m.id === s.doughMethodId ? "selected" : ""}>
-                    ${escapeHtml(m.label)}
-                  </option>`
-                )
-                .join("")}
-            </select>
-            <div class="small">${escapeHtml(method?.notes || "")}</div>
-          </div>
-          <div>
-            <label>Dough preset</label>
-            <select id="doughPresetSelect">
-              ${(CONFIG.doughPresets || [])
-                .map(
-                  (m) => `
-                  <option value="${m.id}" ${m.id === s.doughPresetId ? "selected" : ""}>
-                    ${escapeHtml(m.label)}
-                  </option>`
-                )
-                .join("")}
-            </select>
-            <div class="small">${escapeHtml((CONFIG.doughPresets || []).find((p) => p.id === s.doughPresetId)?.description || "")}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
         <h3>Sizing</h3>
         <div class="grid-2">
           <div>
@@ -1239,6 +1276,20 @@ function normalizeFermentationHours(hours, prefermentType) {
               <option value="POOLISH_BIGA_HYBRID" ${s.prefermentType === "POOLISH_BIGA_HYBRID" ? "selected" : ""}>Poolish + Biga Hybrid</option>
               <option value="SOURDOUGH" ${s.prefermentType === "SOURDOUGH" ? "selected" : ""}>Sourdough</option>
             </select>
+          </div>
+          <div>
+            <label>Dough preset</label>
+            <select id="doughPresetSelect">
+              ${(CONFIG.doughPresets || [])
+                .map(
+                  (m) => `
+                  <option value="${m.id}" ${m.id === s.doughPresetId ? "selected" : ""}>
+                    ${escapeHtml(m.label)}
+                  </option>`
+                )
+                .join("")}
+            </select>
+            <div class="small">${escapeHtml((CONFIG.doughPresets || []).find((p) => p.id === s.doughPresetId)?.description || "")}</div>
           </div>
           <div>
             <label>Fermentation location</label>
@@ -1537,8 +1588,9 @@ function normalizeFermentationHours(hours, prefermentType) {
       saveState();
       render();
     };
-    $("#doughMethodSelect").onchange = (e) => { s.doughMethodId = e.target.value; saveState(); render(); };
-    $("#doughPresetSelect").onchange = (e) => applyDoughPreset(e.target.value);
+    if ($("#doughPresetSelect")) {
+      $("#doughPresetSelect").onchange = (e) => applyDoughPreset(e.target.value);
+    }
 
     // Oven selection
     const ovenSel = $("#ovenSelect");
@@ -1601,8 +1653,7 @@ function normalizeFermentationHours(hours, prefermentType) {
 
     if ($("#prefType")) {
       $("#prefType").onchange = (e) => {
-        s.prefermentType = e.target.value;
-        s.totalFermentationHours = normalizeFermentationHours(s.totalFermentationHours, s.prefermentType);
+        resetSessionForPrefermentType(e.target.value, { doughPresetId: "manual" });
         saveState();
         render();
       };
