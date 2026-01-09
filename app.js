@@ -18,7 +18,6 @@
     drafts: {},
     errors: {}
   };
-  const DEV = true;
 
   const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
@@ -402,9 +401,6 @@ const BASE_OVENS_RAW = [
         counterC: null
       }
 },
-    resolved_session_v2: null,
-    derived_session_v2: null,
-    pizzaioloBundle: null,
     session: {
       schemaVersion: "1.0",
       sessionId: cryptoSafeId("session"),
@@ -921,46 +917,16 @@ function getProgramTempTargets(prog) {
     });
   }
 
-  function getResolvedSessionV2() {
-    if (!window.SessionResolverV2 || typeof window.SessionResolverV2.resolveSessionV2 !== "function") {
-      return { resolved_session_v2: null, derived_session_v2: null, warnings: [] };
-    }
-
-    const inputs = window.SessionResolverV2.legacyToV2Inputs({
-      legacy_session: STATE.session
-    });
-
-    const result = window.SessionResolverV2.resolveSessionV2({
-      ...inputs,
-      orders_state: STATE.orders
-    });
-
-    STATE.resolved_session_v2 = result.resolved_session_v2;
-    STATE.derived_session_v2 = result.derived_session_v2;
-    STATE.pizzaioloBundle = window.SessionResolverV2.getPizzaioloBundle();
-
-    return result;
-  }
-
-  function getV2DashboardTotals() {
-    const result = getResolvedSessionV2();
-    if (!window.SessionResolverV2 || typeof window.SessionResolverV2.v2DerivedToLegacyDashboard !== "function") {
-      return null;
-    }
-    return window.SessionResolverV2.v2DerivedToLegacyDashboard(result.derived_session_v2);
-  }
-
   /* ---------- Dough totals ---------- */
   function computeDough() {
-    const v2Totals = getV2DashboardTotals();
+    const plan = getPlan();
+    const totals = plan.ingredients?.totals;
+    const preferment = plan.ingredients?.preferment;
+    const finalMix = plan.ingredients?.finalMix;
     const ordered = totalPizzasFromOrders();
     const balls = ensureMinimumBallLogic();
 
-    if (!v2Totals) {
-      const plan = getPlan();
-      const totals = plan.ingredients?.totals;
-      const preferment = plan.ingredients?.preferment;
-      const finalMix = plan.ingredients?.finalMix;
+    if (!totals) {
       return {
         ordered,
         balls,
@@ -980,15 +946,15 @@ function getProgramTempTargets(prog) {
     return {
       ordered,
       balls,
-      totalDoughG: round(v2Totals.total_dough_g || 0, 0),
-      flourG: round(v2Totals.total_flour_g || 0, 0),
-      waterG: round(v2Totals.total_water_g || 0, 0),
-      saltG: round(v2Totals.total_salt_g || 0, 1),
-      honeyG: round(v2Totals.total_honey_g || 0, 1),
-      yeastG: round(v2Totals.total_yeast_g || 0, 2),
-      prefermentFlourG: round(v2Totals.preferment_flour_g || 0, 0),
-      finalFlourG: round(v2Totals.final_mix_flour_g || 0, 0),
-      yeastType: v2Totals.yeast_type || "IDY",
+      totalDoughG: round(plan.totalDoughG || 0, 0),
+      flourG: round(totals.flourG || 0, 0),
+      waterG: round(totals.waterG || 0, 0),
+      saltG: round(totals.saltG || 0, 1),
+      honeyG: round(totals.honeyG || 0, 1),
+      yeastG: round(totals.yeastG || 0, 2),
+      prefermentFlourG: round(preferment?.flourG || 0, 0),
+      finalFlourG: round(finalMix?.flourG || 0, 0),
+      yeastType: totals.yeastType || "IDY",
       yeastMult: 1
     };
   }
@@ -1066,8 +1032,7 @@ function normalizeFermentationHours(hours, prefermentType) {
   function updateSessionOutputs() {
     const s = STATE.session;
     const c = computeDough();
-    const v2 = getResolvedSessionV2();
-    const derived = v2.derived_session_v2 || {};
+    const plan = getPlan();
     const ballsUsed = ensureMinimumBallLogic();
     const waterRec = recommendWaterTempC();
 
@@ -1087,8 +1052,8 @@ function normalizeFermentationHours(hours, prefermentType) {
     setText("totals-yeast", `${c.yeastG} g`);
     setText("pref-flour", `${c.prefermentFlourG} g`);
     setText("pref-final-flour", `${c.finalFlourG} g`);
-    setText("pref-pct", derived.preferment_flour_g ? "—" : "0%");
-    setText("pref-type", derived.preferment_type ? derived.preferment_type.toUpperCase() : "NONE");
+    setText("pref-pct", plan.ingredients?.preferment ? "—" : "0%");
+    setText("pref-type", plan.ingredients?.preferment?.type || "NONE");
 
     const doughModeEl = document.getElementById("dough-mode-copy");
     if (doughModeEl) doughModeEl.textContent = doughModeCopy();
@@ -1124,8 +1089,6 @@ function normalizeFermentationHours(hours, prefermentType) {
     const s = STATE.session;
     const c = computeDough();
     const plan = getPlan();
-    const v2 = getResolvedSessionV2();
-    const derived = v2.derived_session_v2 || {};
     const waterRec = recommendWaterTempC();
     const ballsUsed = ensureMinimumBallLogic();
     const ov = getSelectedOven();
@@ -1604,8 +1567,8 @@ function normalizeFermentationHours(hours, prefermentType) {
             <div class="kpi">
               <div class="box"><div class="small">Preferment flour</div><div class="v" id="pref-flour">${c.prefermentFlourG} g</div></div>
               <div class="box"><div class="small">Final flour</div><div class="v" id="pref-final-flour">${c.finalFlourG} g</div></div>
-              <div class="box"><div class="small">Preferment %</div><div class="v" id="pref-pct">${derived.preferment_flour_g ? "—" : "0%"}</div></div>
-              <div class="box"><div class="small">Preferment type</div><div class="v" id="pref-type">${escapeHtml(derived.preferment_type ? derived.preferment_type.toUpperCase() : "NONE")}</div></div>
+              <div class="box"><div class="small">Preferment %</div><div class="v" id="pref-pct">—</div></div>
+              <div class="box"><div class="small">Preferment type</div><div class="v" id="pref-type">${escapeHtml(plan.ingredients?.preferment?.type || "NONE")}</div></div>
             </div>
           </div>
         ` : `
@@ -3878,25 +3841,6 @@ function renderMaking() {
       await loadToppings();
     } catch (err) {
       console.error("Toppings load failed:", err);
-    }
-
-    if (window.SessionResolverV2) {
-      try {
-        await window.SessionResolverV2.loadDoughMethods();
-        await window.SessionResolverV2.loadDoughPresets();
-        await window.SessionResolverV2.loadCustomPresets();
-      } catch (err) {
-        console.error("Session resolver v2 load failed:", err);
-      }
-
-      window.SessionResolverV2.setCatalogs({
-        ovens: CONFIG.ovens || [],
-        mixers: CONFIG.mixers || []
-      });
-    }
-
-    if (DEV) {
-      console.assert(Array.isArray(CONFIG.ovens) && CONFIG.ovens.length > 0, "Ovens list should be populated.");
     }
 
     saveState();
