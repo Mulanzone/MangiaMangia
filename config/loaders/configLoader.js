@@ -17,16 +17,7 @@
   async function fetchJson(path) {
     const res = await fetch(path, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status} for ${path}`);
-    const text = await res.text();
-    try {
-      return JSON.parse(text);
-    } catch (err) {
-      const stripped = text
-        .split("\n")
-        .filter((line) => !line.trim().startsWith("//"))
-        .join("\n");
-      return JSON.parse(stripped);
-    }
+    return await res.json();
   }
 
   function coercePresetArray(json) {
@@ -269,24 +260,6 @@ async function loadToppings({ path, fallback }) {
   return arr.filter((item) => item && item.id);
 }
 
-async function loadPizzaStyles({ path, fallback }) {
-  let json;
-  try {
-    json = await fetchJson(path);
-  } catch (e) {
-    return Array.isArray(fallback) && fallback.length ? fallback : [];
-  }
-
-  const arr =
-    Array.isArray(json) ? json :
-    (json && Array.isArray(json.items) ? json.items :
-    (json && Array.isArray(json.styles) ? json.styles : null));
-
-  if (!arr) return Array.isArray(fallback) && fallback.length ? fallback : [];
-
-  return arr.filter((item) => item && item.id);
-}
-
 function getOvenById(ovens, id) {
   return (ovens || []).find((o) => o.id === id) || null;
 }
@@ -308,7 +281,6 @@ function getMixerById(mixers, id) {
     loadMixers,
     loadOvens,
     loadToppings,
-    loadPizzaStyles,
     getOvenById,
     getOvenProgramById,
     getMixerById
