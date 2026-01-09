@@ -305,6 +305,67 @@
     };
   }
 
+  function computeIngredientBreakdown({ totals, prefermentType, prefermentPct }) {
+    const errors = [];
+    const t = totals || {};
+    const totalFlour = Number(t.flour || 0);
+    const totalWater = Number(t.water || 0);
+    const totalSalt = Number(t.salt || 0);
+    const totalHoney = Number(t.honey || 0);
+    const totalYeast = Number(t.yeast || 0);
+
+    const prefType = String(prefermentType || "direct").toLowerCase();
+    const pct = clamp(Number(prefermentPct || 0), 0, 100) / 100;
+
+    let hydration = 1;
+    if (prefType === "biga") hydration = 0.55;
+    if (prefType === "tiga") hydration = 0.7;
+
+    const usePreferment = prefType !== "direct" && pct > 0;
+    const prefermentFlour = usePreferment ? Math.min(totalFlour, totalFlour * pct) : 0;
+    const prefermentWater = usePreferment ? Math.min(totalWater, prefermentFlour * hydration) : 0;
+    const prefermentHoney = usePreferment ? totalHoney : 0;
+    const prefermentYeast = usePreferment ? totalYeast : 0;
+
+    const finalFlour = Math.max(0, totalFlour - prefermentFlour);
+    const finalWater = Math.max(0, totalWater - prefermentWater);
+    const finalHoney = Math.max(0, totalHoney - prefermentHoney);
+    const finalYeast = Math.max(0, totalYeast - prefermentYeast);
+
+    const prefermentTotalMass = prefermentFlour + prefermentWater + prefermentHoney + prefermentYeast;
+
+    if (usePreferment && prefermentFlour === 0) {
+      errors.push("Preferment flour is zero; check preferment percentage.");
+    }
+
+    return {
+      totals: {
+        flour: round(totalFlour, 1),
+        water: round(totalWater, 1),
+        salt: round(totalSalt, 1),
+        honey: round(totalHoney, 1),
+        yeast: round(totalYeast, 2)
+      },
+      preferment: {
+        type: prefType,
+        flour: round(prefermentFlour, 1),
+        water: round(prefermentWater, 1),
+        honey: round(prefermentHoney, 1),
+        yeast: round(prefermentYeast, 2),
+        totalMass: round(prefermentTotalMass, 1)
+      },
+      finalMix: {
+        flour: round(finalFlour, 1),
+        water: round(finalWater, 1),
+        salt: round(totalSalt, 1),
+        honey: round(finalHoney, 1),
+        yeast: round(finalYeast, 2),
+        addPrefermentMass: round(prefermentTotalMass, 1)
+      },
+      errors
+    };
+  }
+
   function computeWaterTempC(session, mixerProfile) {
     const temps = session.temps || {};
     const target = Number.isFinite(Number(session.temperaturePlanning?.targetDDTC))
@@ -435,6 +496,7 @@
   }
 
   return {
-    resolveSessionToPlan
+    resolveSessionToPlan,
+    computeIngredientBreakdown
   };
 });
