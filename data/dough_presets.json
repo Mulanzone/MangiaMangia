@@ -81,7 +81,8 @@
           "Poolish carries honey.",
           "Final mix must show remainder flour and remainder water explicitly."
         ]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -155,7 +156,8 @@
       "instruction_overrides": {
         "honey_placement": "final_mix",
         "notes_md": ["Direct mix; honey added with final mix water."]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -252,7 +254,8 @@
           "Keep biga cool to preserve structure.",
           "Final mix should emphasize full incorporation without overheating."
         ]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -326,7 +329,8 @@
         "mix_method": "hand",
 
         "batching_max_dough_mass_g": 3500
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -396,7 +400,8 @@
       },
       "instruction_overrides": {
         "notes_md": ["Emphasize repeatability: weigh precisely; track dough temperature."]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -484,7 +489,8 @@
           "High hydration with gentle handling.",
           "Pan oiling and dimpling are core to outcome; split bake/toppings is common."
         ]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -554,7 +560,8 @@
       },
       "instruction_overrides": {
         "notes_md": ["DDT-first: adjust water temperature to hit target final dough temperature."]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -624,7 +631,8 @@
       },
       "instruction_overrides": {
         "notes_md": ["Minimal additions; prioritize flour quality and fermentation control."]
-      }
+      },
+      "toppings": []
     },
 
     {
@@ -657,7 +665,8 @@
       "overrides": null,
       "instruction_overrides": {
         "notes_md": ["You control every parameter; defaults come from dough_methods + style outputs in-session."]
-      }
+      },
+      "toppings": []
     }
   ]
 }
