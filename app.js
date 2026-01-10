@@ -42,6 +42,7 @@
   const LS_KEY = "mm_app_state_v3";
   const ASSET_BASE_KEY = "mm_asset_base";
   const CUSTOM_PRESET_ID = "manual_custom";
+  const PAN_DENSITY_G_CM2 = 0.59;
 
   const APP_STATE = {
     catalogs: {
@@ -55,11 +56,15 @@
       inputs: {},
       resolved: {},
       derived: {},
-    warnings: [],
-    safetyViolations: {},
-    presetNotices: [],
+      warnings: [],
+      safetyViolations: {},
+      presetNotices: [],
       requiredKeys: [],
-      coverageMissing: []
+      coverageMissing: [],
+      flags: {
+        doughWeightUserOverride: false,
+        panAutoWeightEnabled: true
+      }
     },
     ui: {
       activeTab: "session",
@@ -82,7 +87,7 @@
     oven_type: "gas_pizza_oven",
     flour_blend_id: "00_only",
     mixer_id: null,
-    target_pizza_count: 2,
+    target_pizza_count: 0,
     dough_unit_weight_g: 270,
     pan_or_tray_area_cm2: null,
     dough_grams_per_cm2: null,
@@ -142,9 +147,7 @@
     batching_max_dough_mass_g: "ui"
   };
 
-  const DEFAULT_ORDERS = [
-    { id: "order_1", name: "Guest", quantity: 2, notes: "" }
-  ];
+  const DEFAULT_ORDERS = [];
 
   function cloneDefaultOrders() {
     return DEFAULT_ORDERS.map((order) => ({ ...order }));
@@ -477,6 +480,39 @@
     return null;
   }
 
+  const PRESET_CUSTOM_KEYS = new Set([
+    "dough_unit_weight_g",
+    "preferment_type",
+    "preferment_flour_percent_of_total",
+    "preferment_hydration_percent",
+    "preferment_mature_hours",
+    "hybrid_poolish_share_percent",
+    "hybrid_biga_share_percent",
+    "poolish_hydration_percent",
+    "biga_hydration_percent",
+    "starter_enabled",
+    "starter_hydration_percent",
+    "starter_inoculation_percent",
+    "starter_peak_window_hours",
+    "fermentation_location",
+    "bulk_ferment_hours",
+    "cold_ferment_hours",
+    "ball_or_pan_ferment_hours",
+    "hydration_percent",
+    "salt_percent",
+    "oil_percent",
+    "honey_percent",
+    "sugar_percent",
+    "diastatic_malt_percent",
+    "yeast_percent",
+    "yeast_type",
+    "ambient_temp_c",
+    "flour_temp_c",
+    "fridge_temp_c",
+    "ddt_model_enabled",
+    "target_fdt_c"
+  ]);
+
   function syncPrefermentFlags(inputs, method) {
     const type = inputs.preferment_type || "direct";
     const prefermentEnabled = type !== "direct" && type !== "sourdough";
@@ -500,6 +536,36 @@
         APP_STATE.session.inputs[key] = value;
       }
     });
+  }
+
+  function buildMethodBaseInputs(method, prefermentType) {
+    const base = normalizeInputs({}, method?.defaults || {}, method);
+    base.preferment_type = prefermentType;
+    base.method_id = method?.method_id || deriveMethodIdFromPrefermentType(prefermentType);
+    syncPrefermentFlags(base, method);
+    return base;
+  }
+
+  function shouldMarkPresetCustom(updates, options = {}) {
+    if (options.markPresetCustom === false) return false;
+    if (options.markPresetCustom === true) return true;
+    return Object.keys(updates).some((key) => PRESET_CUSTOM_KEYS.has(key));
+  }
+
+  function applyUserOverrides(base, overrides, method) {
+    const allowed = new Set([
+      ...Object.keys(base),
+      ...(APP_STATE.session.requiredKeys || [])
+    ]);
+    const next = { ...base };
+    Object.entries(overrides).forEach(([key, value]) => {
+      if (!allowed.has(key)) return;
+      if (key === "preferment_type" || key === "method_id") return;
+      if (!method?.supports?.preferment && key.startsWith("preferment_")) return;
+      if (!method?.supports?.starter && key.startsWith("starter_")) return;
+      next[key] = value;
+    });
+    return next;
   }
 
   function recordPresetNotice(message) {
@@ -749,7 +815,7 @@
     let doughUnitWeight = Number(resolved.dough_unit_weight_g || 0);
     let ballsUsed = Number(resolved.target_pizza_count || ordersTotal || 0);
 
-    if (!Number.isFinite(ballsUsed) || ballsUsed <= 0) ballsUsed = ordersTotal || 1;
+    if (!Number.isFinite(ballsUsed) || ballsUsed <= 0) ballsUsed = ordersTotal || 0;
 
     if (!isPan) {
       const minBalls = 6;
@@ -769,18 +835,25 @@
       if (resolved.target_pizza_count !== 1) {
         APP_STATE.session.inputs.target_pizza_count = 1;
       }
-      const minPanWeight = 750;
-      if (!Number.isFinite(doughUnitWeight) || doughUnitWeight < minPanWeight) {
-        APP_STATE.session.warnings.push(`Pan dough weight clamped to ${minPanWeight}g minimum.`);
-        doughUnitWeight = minPanWeight;
+      const defaultPanWeight = 750;
+      if (!APP_STATE.session.flags.doughWeightUserOverride) {
+        doughUnitWeight = defaultPanWeight;
         APP_STATE.session.inputs.dough_unit_weight_g = doughUnitWeight;
       }
-      const area = Number(resolved.pan_or_tray_area_cm2 || 0);
-      const gramsPerCm = Number(resolved.dough_grams_per_cm2 || 0);
-      if (area > 0 && gramsPerCm > 0) {
-        const areaWeight = Math.round(area * gramsPerCm);
-        if (Number.isFinite(areaWeight) && areaWeight > minPanWeight) {
-          doughUnitWeight = areaWeight;
+
+      const lengthIn = Number(resolved.pan_length_in || 0);
+      const widthIn = Number(resolved.pan_width_in || 0);
+      if (
+        APP_STATE.session.flags.panAutoWeightEnabled &&
+        Number.isFinite(lengthIn) &&
+        Number.isFinite(widthIn) &&
+        lengthIn > 0 &&
+        widthIn > 0
+      ) {
+        const areaCm2 = lengthIn * 2.54 * (widthIn * 2.54);
+        const computedWeight = Math.round(areaCm2 * PAN_DENSITY_G_CM2);
+        if (Number.isFinite(computedWeight) && computedWeight > 0) {
+          doughUnitWeight = computedWeight;
           APP_STATE.session.inputs.dough_unit_weight_g = doughUnitWeight;
         }
       }
@@ -933,15 +1006,23 @@
     render();
   }
 
+  function resetSessionInputs() {
+    const defaultMethod = getMethodById(BASE_INPUT_DEFAULTS.method_id) || APP_STATE.methods[0];
+    const defaults = normalizeInputs({}, defaultMethod?.defaults || {}, defaultMethod);
+    APP_STATE.session.inputs = defaults;
+    APP_STATE.session.flags.doughWeightUserOverride = false;
+    APP_STATE.session.flags.panAutoWeightEnabled = true;
+    updateStateAndRender();
+  }
+
   function applyInputChanges(updates, options = {}) {
-    const { markPresetCustom = true } = options;
     const inputs = APP_STATE.session.inputs;
     const entries = Object.entries(updates);
     const hasChanges = entries.some(([key, value]) => inputs[key] !== value);
     if (!hasChanges) return;
 
     if (
-      markPresetCustom &&
+      shouldMarkPresetCustom(updates, options) &&
       inputs.preset_id &&
       inputs.preset_id !== CUSTOM_PRESET_ID &&
       !Object.prototype.hasOwnProperty.call(updates, "preset_id")
@@ -957,33 +1038,44 @@
   }
 
   function resetOrdersForStyle(styleId) {
-    if (styleId !== "neapolitan_round") {
-      APP_STATE.orders = [
-        { id: cryptoSafeId("order"), name: "Party", quantity: 1, notes: "" }
-      ];
-      return;
-    }
-    APP_STATE.orders = cloneDefaultOrders();
+    if (!styleId) return;
+    APP_STATE.orders = APP_STATE.orders || [];
   }
 
   function applyStyleDefaults(styleId) {
     if (styleId !== "neapolitan_round") {
-      return { dough_unit_weight_g: 750, target_pizza_count: 1 };
+      const updates = { target_pizza_count: 1 };
+      if (!APP_STATE.session.flags.doughWeightUserOverride) {
+        updates.dough_unit_weight_g = 750;
+      }
+      return updates;
     }
-    return { dough_unit_weight_g: 270, target_pizza_count: 6 };
+    const updates = { target_pizza_count: 6 };
+    if (!APP_STATE.session.flags.doughWeightUserOverride) {
+      updates.dough_unit_weight_g = 270;
+    }
+    return updates;
   }
 
   function applyPrefermentTypeChange(value, options = {}) {
-    const { markPresetCustom = true } = options;
-    const prevMethodId = APP_STATE.session.inputs.method_id;
+    const prevInputs = { ...APP_STATE.session.inputs };
     const nextMethodId = deriveMethodIdFromPrefermentType(value);
-    APP_STATE.session.inputs.preferment_type = value;
-    APP_STATE.session.inputs.method_id = nextMethodId;
-    applyMethodDefaultsForChange(getMethodById(nextMethodId), prevMethodId);
-    syncPrefermentFlags(APP_STATE.session.inputs, getMethodById(nextMethodId));
-    if (markPresetCustom && APP_STATE.session.inputs.preset_id !== CUSTOM_PRESET_ID) {
-      APP_STATE.session.inputs.preset_id = CUSTOM_PRESET_ID;
+    const nextMethod = getMethodById(nextMethodId) || APP_STATE.methods[0];
+    const preset = getPresetById(prevInputs.preset_id);
+    const presetOverrides =
+      preset && prevInputs.preset_id !== CUSTOM_PRESET_ID ? preset.overrides || {} : {};
+
+    const baseInputs = buildMethodBaseInputs(nextMethod, value);
+    const withPreset = mergeOverrides(baseInputs, presetOverrides);
+    const rehydrated = applyUserOverrides(withPreset, prevInputs, nextMethod);
+    rehydrated.preferment_type = value;
+    rehydrated.method_id = nextMethodId;
+
+    if (shouldMarkPresetCustom({ preferment_type: value }, options) && rehydrated.preset_id !== CUSTOM_PRESET_ID) {
+      rehydrated.preset_id = CUSTOM_PRESET_ID;
     }
+
+    APP_STATE.session.inputs = rehydrated;
     updateStateAndRender();
   }
 
@@ -1080,6 +1172,8 @@
     const showPrefermentCard = prefermentType !== "direct";
     const existingDough = resolved.dough_modality === "existing_dough";
     const safetyWarnings = APP_STATE.session.safetyViolations || {};
+    const showSizing = !existingDough && isPan;
+    const ballWeightLabel = isPan ? "Dough Weight (g)" : "Ball Weight (g)";
     const totalFermentHours =
       Number(resolved.bulk_ferment_hours || 0) +
       Number(resolved.cold_ferment_hours || 0) +
@@ -1091,6 +1185,18 @@
         : "single";
 
     root.innerHTML = `
+      <div class="card" id="card-session-actions">
+        <div class="grid-2">
+          <div>
+            <strong>Session actions</strong>
+            <div class="small">Reset Pizza Party inputs without touching Orders.</div>
+          </div>
+          <div style="text-align:right;">
+            <button id="resetSession">Reset Session</button>
+          </div>
+        </div>
+      </div>
+
       <div class="card" id="card-dashboard">
         <h2>Pizza Party Dashboard</h2>
         <p>One dough for everyone. Orders only change how many balls you need.</p>
@@ -1111,28 +1217,8 @@
             <div class="small">Timeline is scheduled backward from this time.</div>
           </div>
           <div>
-            <label>Dough modality</label>
-            <select id="doughModality">
-              <option value="make_dough" ${resolved.dough_modality === "make_dough" ? "selected" : ""}>Make dough</option>
-              <option value="existing_dough" ${resolved.dough_modality === "existing_dough" ? "selected" : ""}>Use existing dough</option>
-            </select>
-          </div>
-          <div>
-            <label>Style</label>
-            <select id="styleId">
-              <option value="neapolitan_round" ${resolved.pizza_style_id === "neapolitan_round" ? "selected" : ""}>Neapolitan Round</option>
-              <option value="teglia_bonci" ${resolved.pizza_style_id === "teglia_bonci" ? "selected" : ""}>Pan / Teglia</option>
-            </select>
-            <div class="small">Pan style forces 1 pan and minimum dough weight.</div>
-          </div>
-          <div>
-            <label>Dough preset</label>
-            <select id="presetSelect">
-              ${APP_STATE.presets.map((p) => `
-                <option value="${p.id}" ${p.id === resolved.preset_id ? "selected" : ""}>${escapeHtml(p.label)}</option>
-              `).join("")}
-            </select>
-            <div class="small">${escapeHtml(preset?.label || "")}</div>
+            <label>${ballWeightLabel}</label>
+            <input type="number" id="ballWeight" value="${escapeHtml(derived.dough_unit_weight_g)}">
           </div>
         </div>
       </div>
@@ -1151,80 +1237,71 @@
               ${oven?.constraints?.max_pizza_diameter_in ? `Max: ${escapeHtml(oven.constraints.max_pizza_diameter_in)}"` : ""}
               ${oven?.constraints?.supports_round_only ? " • Round only" : ""}
             </div>
+            ${!existingDough ? `
             <div style="margin-top:10px;">
-              <label>Settings</label>
-              <select id="ovenSettingSelect">
-                ${settings.map((s) => `
-                  <option value="${s.id}" ${s.id === resolved.oven_setting_id ? "selected" : ""}>${escapeHtml(s.display_name || s.id)}</option>
+              <label>Mixer</label>
+              <select id="mixerSelect">
+                ${mixers.map((m) => `
+                  <option value="${m.id}" ${m.id === resolved.mixer_id ? "selected" : ""}>${escapeHtml(m.display_name)}</option>
                 `).join("")}
               </select>
             </div>
+            ` : ""}
           </div>
           <div>
-            <label>Mixer</label>
-            <select id="mixerSelect">
-              ${mixers.map((m) => `
-                <option value="${m.id}" ${m.id === resolved.mixer_id ? "selected" : ""}>${escapeHtml(m.display_name)}</option>
+            <label>Settings</label>
+            <select id="ovenSettingSelect">
+              ${settings.map((s) => `
+                <option value="${s.id}" ${s.id === resolved.oven_setting_id ? "selected" : ""}>${escapeHtml(s.display_name || s.id)}</option>
               `).join("")}
             </select>
           </div>
         </div>
       </div>
 
-      <div class="card" id="card-method">
-        <h3>Dough Method & Preset</h3>
-        ${existingDough ? `
-          <div class="grid-2">
-            <div>
-              <label>Existing dough condition</label>
-              <select id="existingDoughState">
-                <option value="frozen" ${resolved.existing_dough_state === "frozen" ? "selected" : ""}>Frozen</option>
-                <option value="thawed" ${resolved.existing_dough_state === "thawed" ? "selected" : ""}>Thawed</option>
-                <option value="store_bought" ${resolved.existing_dough_state === "store_bought" ? "selected" : ""}>Store bought</option>
-              </select>
-            </div>
-          </div>
-        ` : `
-          <div class="small">Method is derived from your Preferment Type selection.</div>
-          <div class="small" style="margin-top:6px;">Current method: ${escapeHtml(method?.display_name || "—")}</div>
-        `}
-      </div>
-
-      <div class="card" id="card-sizing" style="${existingDough ? "display:none;" : ""}">
+      ${showSizing ? `
+      <div class="card" id="card-sizing">
         <h3>Sizing</h3>
         <div class="grid-2">
           <div>
-            <label>Balls used</label>
-            <input type="number" id="ballsUsed" value="${escapeHtml(resolved.target_pizza_count)}" ${isPan ? "disabled" : ""}>
-          </div>
-          <div>
-            <label>${isPan ? "Pan dough weight (g)" : "Ball weight (g)"}</label>
-            <input type="number" id="ballWeight" value="${escapeHtml(derived.dough_unit_weight_g)}">
-          </div>
-          ${isPan ? `
-          <div>
-            <label>Pan area (cm²)</label>
-            <input type="number" id="panArea" value="${escapeHtml(resolved.pan_or_tray_area_cm2 ?? "")}">
-          </div>
-          <div>
-            <label>Dough grams per cm²</label>
-            <input type="number" id="gramsPerCm" value="${escapeHtml(resolved.dough_grams_per_cm2 ?? "")}">
-          </div>
-          <div>
-            <label>Pan length (in) — placeholder</label>
+            <label>Pan length (in)</label>
             <input type="number" id="panLength" value="${escapeHtml(resolved.pan_length_in ?? "")}">
           </div>
           <div>
-            <label>Pan width (in) — placeholder</label>
+            <label>Pan width (in)</label>
             <input type="number" id="panWidth" value="${escapeHtml(resolved.pan_width_in ?? "")}">
           </div>
-          ` : ""}
         </div>
       </div>
+      ` : ""}
 
-      <div class="card" id="card-fermentation" style="${existingDough ? "display:none;" : ""}">
-        <h3>Fermentation Plan</h3>
+      <div class="card" id="card-fermentation">
+        <h3>Dough Configuration</h3>
         <div class="grid-2">
+          <div>
+            <label>Dough modality</label>
+            <select id="doughModality">
+              <option value="make_dough" ${resolved.dough_modality === "make_dough" ? "selected" : ""}>Make dough</option>
+              <option value="existing_dough" ${resolved.dough_modality === "existing_dough" ? "selected" : ""}>Use existing dough</option>
+            </select>
+          </div>
+          <div>
+            <label>Style</label>
+            <select id="styleId">
+              <option value="neapolitan_round" ${resolved.pizza_style_id === "neapolitan_round" ? "selected" : ""}>Neapolitan Round</option>
+              <option value="teglia_bonci" ${resolved.pizza_style_id === "teglia_bonci" ? "selected" : ""}>Pan / Teglia</option>
+            </select>
+            <div class="small">Pan style sets dough weight defaults.</div>
+          </div>
+          <div>
+            <label>Dough preset</label>
+            <select id="presetSelect">
+              ${APP_STATE.presets.map((p) => `
+                <option value="${p.id}" ${p.id === resolved.preset_id ? "selected" : ""}>${escapeHtml(p.label)}</option>
+              `).join("")}
+            </select>
+            <div class="small">${escapeHtml(preset?.label || "")}</div>
+          </div>
           <div>
             <label>Preferment type</label>
             <select id="prefermentType">
@@ -1236,42 +1313,64 @@
               <option value="sourdough" ${resolved.preferment_type === "sourdough" ? "selected" : ""}>Sourdough Starter</option>
             </select>
           </div>
+          ${existingDough ? `
           <div>
-            <label>Fermentation location</label>
-            <select id="fermLoc">
-              ${(APP_STATE.methodsJson?.enums?.fermentation_location || ["room", "cold", "mixed"]).map((loc) => `
-                <option value="${loc}" ${resolved.fermentation_location === loc ? "selected" : ""}>${escapeHtml(loc)}</option>
-              `).join("")}
+            <label>Existing dough condition</label>
+            <select id="existingDoughState">
+              <option value="frozen" ${resolved.existing_dough_state === "frozen" ? "selected" : ""}>Frozen</option>
+              <option value="thawed" ${resolved.existing_dough_state === "thawed" ? "selected" : ""}>Thawed</option>
+              <option value="store_bought" ${resolved.existing_dough_state === "store_bought" ? "selected" : ""}>Store bought</option>
             </select>
           </div>
+          ` : `
           <div>
-            <label>Fermentation mode</label>
-            <select id="fermMode">
-              <option value="single" ${fermentMode === "single" ? "selected" : ""}>Single</option>
-              <option value="double" ${fermentMode === "double" ? "selected" : ""}>Double</option>
-            </select>
+            <div class="small">Method is derived from your Preferment Type selection.</div>
+            <div class="small" style="margin-top:6px;">Current method: ${escapeHtml(method?.display_name || "—")}</div>
           </div>
-          <div>
-            <label>Total fermentation hours</label>
-            <select id="fermTotal">
-              ${[0, 24, 48].map((value) => `
-                <option value="${value}" ${lockedFermentTotal === value ? "selected" : ""}>${value}</option>
-              `).join("")}
-            </select>
-          </div>
-          <div>
-            <label>Bulk ferment hours</label>
-            <input type="number" id="bulkHours" value="${escapeHtml(resolved.bulk_ferment_hours)}">
-          </div>
-          <div>
-            <label>Cold ferment hours</label>
-            <input type="number" id="coldHours" value="${escapeHtml(resolved.cold_ferment_hours)}">
-          </div>
-          <div>
-            <label>Ball/Pan ferment hours</label>
-            <input type="number" id="ballHours" value="${escapeHtml(resolved.ball_or_pan_ferment_hours)}">
+          `}
+        </div>
+        ${existingDough ? "" : `
+        <div class="card" style="margin-top:12px;">
+          <h4>Fermentation Settings</h4>
+          <div class="grid-2" style="margin-top:10px;">
+            <div>
+              <label>Fermentation mode</label>
+              <select id="fermMode">
+                <option value="single" ${fermentMode === "single" ? "selected" : ""}>Single</option>
+                <option value="double" ${fermentMode === "double" ? "selected" : ""}>Double</option>
+              </select>
+            </div>
+            <div>
+              <label>Fermentation location</label>
+              <select id="fermLoc">
+                ${(APP_STATE.methodsJson?.enums?.fermentation_location || ["room", "cold", "mixed"]).map((loc) => `
+                  <option value="${loc}" ${resolved.fermentation_location === loc ? "selected" : ""}>${escapeHtml(loc)}</option>
+                `).join("")}
+              </select>
+            </div>
+            <div>
+              <label>Total fermentation hours</label>
+              <select id="fermTotal">
+                ${[0, 24, 48].map((value) => `
+                  <option value="${value}" ${lockedFermentTotal === value ? "selected" : ""}>${value}</option>
+                `).join("")}
+              </select>
+            </div>
+            <div>
+              <label>Bulk ferment hours</label>
+              <input type="number" id="bulkHours" value="${escapeHtml(resolved.bulk_ferment_hours)}">
+            </div>
+            <div>
+              <label>Cold ferment hours</label>
+              <input type="number" id="coldHours" value="${escapeHtml(resolved.cold_ferment_hours)}">
+            </div>
+            <div>
+              <label>Ball/Pan ferment hours</label>
+              <input type="number" id="ballHours" value="${escapeHtml(resolved.ball_or_pan_ferment_hours)}">
+            </div>
           </div>
         </div>
+        `}
       </div>
 
       <div class="card" id="card-warnings" style="${existingDough ? "display:none;" : ""}">
@@ -1332,7 +1431,7 @@
       </div>
 
       <div class="card" id="card-formula" style="${existingDough ? "display:none;" : ""}">
-        <h3>Formula Overrides</h3>
+        <h3>Ingredient Configuration</h3>
         <div class="grid-2">
           <div>
             <label>Hydration %</label>
@@ -1434,11 +1533,17 @@
 
     renderWarnings();
 
+    on("#resetSession", "click", () => {
+      if (!window.confirm("Seriously?")) return;
+      resetSessionInputs();
+    });
+
     on("#plannedEat", "change", (e) => applyInputChanges({ planned_eat_time_iso: localInputToISO(e.target.value) }));
     on("#doughModality", "change", (e) => applyInputChanges({ dough_modality: e.target.value }));
     on("#styleId", "change", (e) => {
       const nextStyle = e.target.value;
       if (nextStyle === resolved.pizza_style_id) return;
+      APP_STATE.session.flags.panAutoWeightEnabled = true;
       resetOrdersForStyle(nextStyle);
       const defaults = applyStyleDefaults(nextStyle);
       applyInputChanges({ pizza_style_id: nextStyle, ...defaults });
@@ -1459,12 +1564,35 @@
     });
     on("#existingDoughState", "change", (e) => applyInputChanges({ existing_dough_state: e.target.value }));
 
-    handleNumberInput($("#ballsUsed"), "target_pizza_count", { integer: true });
-    handleNumberInput($("#ballWeight"), "dough_unit_weight_g", { integer: true });
-    handleNumberInput($("#panArea"), "pan_or_tray_area_cm2");
-    handleNumberInput($("#gramsPerCm"), "dough_grams_per_cm2");
-    handleNumberInput($("#panLength"), "pan_length_in");
-    handleNumberInput($("#panWidth"), "pan_width_in");
+    on("#ballWeight", "change", (e) => {
+      const value = Number(e.target.value);
+      if (!Number.isFinite(value)) return;
+      APP_STATE.session.flags.doughWeightUserOverride = true;
+      if (isPan) APP_STATE.session.flags.panAutoWeightEnabled = false;
+      applyInputChanges({ dough_unit_weight_g: Math.round(value) });
+    });
+    on("#panLength", "change", (e) => {
+      const raw = e.target.value;
+      APP_STATE.session.flags.panAutoWeightEnabled = true;
+      if (raw === "") {
+        applyInputChanges({ pan_length_in: null });
+        return;
+      }
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return;
+      applyInputChanges({ pan_length_in: value });
+    });
+    on("#panWidth", "change", (e) => {
+      const raw = e.target.value;
+      APP_STATE.session.flags.panAutoWeightEnabled = true;
+      if (raw === "") {
+        applyInputChanges({ pan_width_in: null });
+        return;
+      }
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return;
+      applyInputChanges({ pan_width_in: value });
+    });
 
     on("#prefermentType", "change", (e) => {
       const value = e.target.value;
