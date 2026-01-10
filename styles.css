@@ -266,3 +266,125 @@ button{
 .small{font-size:12px; color:var(--muted)}
 strong{color:var(--text)}
 .is-hidden{display:none;}
+
+.orders-list{
+  display:contents;
+}
+
+.order-fields{
+  margin-top:6px;
+}
+
+.order-pizzas{
+  margin-top:16px;
+}
+
+.order-pizza-list{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  margin-top:8px;
+}
+
+.order-actions{
+  margin-top:18px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+}
+
+.order-actions button{
+  width:auto;
+}
+
+.pizza-card{
+  display:grid;
+  grid-template-columns: 80px minmax(0, 1fr) 120px 40px;
+  gap:12px;
+  align-items:start;
+  padding:12px;
+  border-radius:12px;
+  background:rgba(255,255,255,.04);
+  border:1px solid var(--border);
+}
+
+.pizza-img{
+  width:72px;
+  height:72px;
+  border-radius:12px;
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--border);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  text-align:center;
+}
+
+.pizza-img--placeholder{
+  color:var(--muted);
+  font-size:11px;
+}
+
+.pizza-img img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+
+.pizza-toppings{
+  margin-top:8px;
+  padding:8px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:rgba(0,0,0,.25);
+  min-height:60px;
+}
+
+.pizza-toppings-list{
+  margin:0;
+  padding-left:16px;
+}
+
+.pizza-count{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.pizza-remove{
+  display:flex;
+  justify-content:center;
+  padding-top:20px;
+}
+
+.btn-danger-mini{
+  width:40px;
+  height:40px;
+  border-radius:10px;
+  border:1px solid rgba(239,68,68,.6);
+  background:rgba(239,68,68,.18);
+  color:#fff;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:18px;
+  line-height:1;
+}
+
+.btn-danger-mini:hover{
+  background:rgba(239,68,68,.28);
+}
+
+@media (max-width:760px){
+  .pizza-card{
+    grid-template-columns: 72px minmax(0, 1fr);
+    grid-template-areas:
+      "image details"
+      "count remove";
+  }
+  .pizza-img{grid-area:image;}
+  .pizza-details{grid-area:details;}
+  .pizza-count{grid-area:count;}
+  .pizza-remove{grid-area:remove; display:flex; align-items:flex-end; justify-content:flex-end;}
+}

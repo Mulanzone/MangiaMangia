@@ -1169,7 +1169,7 @@
       return "<div class=\"small\">No toppings defined.</div>";
     }
     return `
-      <ul class="small" style="margin:0; padding-left:16px;">
+      <ul class="small pizza-toppings-list">
         ${toppings
           .map((topping) => {
             const label = escapeHtml(topping.label || topping.id);
@@ -1178,6 +1178,29 @@
           })
           .join("")}
       </ul>
+    `;
+  }
+
+  function getOrderDisplayName(order, index) {
+    const name = (order?.name || "").trim();
+    return name ? name : `Person ${index + 1}`;
+  }
+
+  function getPresetImageUrl(preset) {
+    if (!preset) return "";
+    return preset.image_url || preset.imageUrl || "";
+  }
+
+  function renderPresetImageHtml(preset) {
+    const imageUrl = getPresetImageUrl(preset);
+    if (!imageUrl) {
+      return `<div class="pizza-img pizza-img--placeholder"><span class="small">No image</span></div>`;
+    }
+    const alt = escapeHtml(preset?.label || "Pizza preset");
+    return `
+      <div class="pizza-img">
+        <img src="${escapeHtml(imageUrl)}" alt="${alt}">
+      </div>
     `;
   }
 
@@ -2049,19 +2072,22 @@ function renderSession() {
     if (!root) return;
     normalizeOrdersData();
     root.innerHTML = `
-      <div class="card">
+      <div class="card orders-overview">
         <h2>Orders</h2>
         <p>Track how many pizzas each person wants.</p>
-        <div id="orders-list"></div>
-        <button id="add-order">Add person</button>
+      </div>
+      <div id="orders-list" class="orders-list"></div>
+      <div class="card">
+        <button id="add-order">Add Person</button>
       </div>
     `;
 
     const list = $("#orders-list");
     if (!list) return;
-    list.innerHTML = APP_STATE.orders.map((order) => `
-      <div class="card" style="margin-top:10px;">
-        <div class="grid-2">
+    list.innerHTML = APP_STATE.orders.map((order, index) => `
+      <div class="card order-card">
+        <h3>${escapeHtml(getOrderDisplayName(order, index))}</h3>
+        <div class="grid-2 order-fields">
           <div>
             <label>Name</label>
             <input type="text" data-order-name="${order.id}" value="${escapeHtml(order.name)}">
@@ -2071,40 +2097,38 @@ function renderSession() {
             <input type="number" data-order-qty="${order.id}" value="${escapeHtml(order.quantity)}">
           </div>
         </div>
-        <div style="margin-top:12px;">
+        <div class="order-pizzas">
           <label>Pizza types</label>
-          <div>
+          <div class="order-pizza-list">
             ${order.pizzas.length ? order.pizzas.map((pizza) => {
               const preset = getPresetById(pizza.preset_id);
               return `
-                <div style="display:grid; grid-template-columns: 84px 1fr 120px 40px; gap:12px; align-items:start; padding:10px; border:1px solid #eee; border-radius:8px; margin-top:12px;">
-                  <div style="width:72px; height:72px; border:1px solid #ddd; background:#f7f7f7; display:flex; align-items:center; justify-content:center; font-size:11px; color:#888;">
-                    No image
-                  </div>
-                  <div>
+                <div class="pizza-card">
+                  ${renderPresetImageHtml(preset)}
+                  <div class="pizza-details">
                     <label class="small">Preset</label>
                     <select data-pizza-preset="${pizza.id}" data-order-id="${order.id}">
                       ${getOrderPresetOptionsHtml(pizza.preset_id)}
                     </select>
-                    <div style="margin-top:8px; padding:6px; border:1px solid #eee; border-radius:6px; background:#fafafa; min-height:60px;">
+                    <div class="pizza-toppings">
                       ${renderPresetToppingsHtml(preset)}
                     </div>
                   </div>
-                  <div>
+                  <div class="pizza-count">
                     <label class="small">Count</label>
                     <input type="number" min="1" step="1" data-pizza-count="${pizza.id}" data-order-id="${order.id}" value="${escapeHtml(pizza.count)}">
                   </div>
-                  <div style="display:flex; justify-content:center; padding-top:20px;">
-                    <button data-pizza-remove="${pizza.id}" data-order-id="${order.id}" style="background:#d9534f; color:#fff; border:none; width:32px; height:32px; border-radius:6px;">−</button>
+                  <div class="pizza-remove">
+                    <button class="btn-danger-mini" data-pizza-remove="${pizza.id}" data-order-id="${order.id}">−</button>
                   </div>
                 </div>
               `;
-            }).join("") : `<div class="small" style="margin-top:8px;">No pizza types yet.</div>`}
+            }).join("") : `<div class="small">No pizza types yet.</div>`}
           </div>
-          <button data-order-add-pizza="${order.id}" style="margin-top:12px;">Add Pizza Type</button>
         </div>
-        <div style="margin-top:12px; text-align:right;">
-          <button data-order-remove="${order.id}">Remove</button>
+        <div class="order-actions">
+          <button data-order-add-pizza="${order.id}">Add Pizza</button>
+          <button data-order-remove="${order.id}">Remove Person</button>
         </div>
       </div>
     `).join("");
