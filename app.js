@@ -1468,7 +1468,7 @@ function renderSession() {
     </div>
     ` : ""}
 
-    <div class="card" id="card-fermentation">
+    <div class="card" id="card-fermentation" style="${existingDough ? "display:none;" : ""}">
       <h3>Dough Configuration</h3>
 
       ${existingDough ? "" : `
