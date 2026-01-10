@@ -40,6 +40,7 @@
   const round = (num, digits = 1) => Math.round(num * 10 ** digits) / 10 ** digits;
 
   const LS_KEY = "mm_app_state_v3";
+  const ASSET_BASE_KEY = "mm_asset_base";
 
   const APP_STATE = {
     catalogs: {
@@ -215,8 +216,43 @@
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
   }
 
+  function getDefaultAssetBase() {
+    const url = new URL(window.location.href);
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/[^/]*$/, "");
+    return url.toString();
+  }
+
+  function normalizeAssetBase(value, defaultBase) {
+    if (!value) return null;
+    try {
+      const url = new URL(value, defaultBase);
+      return new URL("./", url).toString();
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveAssetBase() {
+    const defaultBase = getDefaultAssetBase();
+    const params = new URLSearchParams(window.location.search);
+    const fromParam = normalizeAssetBase(params.get("assetBase"), defaultBase);
+    if (fromParam) {
+      localStorage.setItem(ASSET_BASE_KEY, fromParam);
+      return fromParam;
+    }
+
+    const stored = localStorage.getItem(ASSET_BASE_KEY);
+    const fromStorage = normalizeAssetBase(stored, defaultBase);
+    if (fromStorage) return fromStorage;
+    if (stored) localStorage.removeItem(ASSET_BASE_KEY);
+    return defaultBase;
+  }
+
   function assetUrl(relPath) {
-    return new URL(relPath, document.baseURI).toString();
+    const base = resolveAssetBase();
+    return new URL(relPath, base).toString();
   }
 
   function stripJsonComments(text) {
@@ -292,7 +328,7 @@
 
   async function fetchJson(path) {
     const res = await fetch(path, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Failed to load ${path}`);
+    if (!res.ok) throw new Error(`Failed to load ${path} (HTTP ${res.status})`);
     const text = await res.text();
     return JSON.parse(stripJsonComments(text));
   }
@@ -771,6 +807,19 @@
     });
   }
 
+  function on(sel, event, handler, root = document) {
+    const el = $(sel, root);
+    if (!el) return null;
+    el.addEventListener(event, handler);
+    return el;
+  }
+
+  function setActive(selector, active) {
+    const el = $(selector);
+    if (!el) return;
+    el.classList.toggle("active", active);
+  }
+
   function renderWarnings() {
     const warnings = [
       ...(APP_STATE.session.warnings || []),
@@ -793,6 +842,7 @@
 
   function renderSession() {
     const root = $("#tab-session");
+    if (!root) return;
     const { resolved, derived } = APP_STATE.session;
     const method = getMethodById(resolved.method_id);
     const preset = getPresetById(resolved.preset_id);
@@ -1198,18 +1248,18 @@
 
     renderWarnings();
 
-    $("#plannedEat").addEventListener("change", (e) => setInputValue("planned_eat_time_iso", localInputToISO(e.target.value)));
-    $("#timezone").addEventListener("change", (e) => setInputValue("timezone", e.target.value || "America/Toronto"));
-    $("#doughModality").addEventListener("change", (e) => setInputValue("dough_modality", e.target.value));
-    $("#styleId").addEventListener("change", (e) => setInputValue("pizza_style_id", e.target.value));
-    $("#ovenSelect").addEventListener("change", (e) => setInputValue("oven_id", e.target.value));
-    $("#ovenSettingSelect").addEventListener("change", (e) => setInputValue("oven_setting_id", e.target.value));
-    $("#mixerSelect").addEventListener("change", (e) => setInputValue("mixer_id", e.target.value));
-    $("#mixMethod").addEventListener("change", (e) => setInputValue("mix_method", e.target.value));
-    $("#ovenType").addEventListener("change", (e) => setInputValue("oven_type", e.target.value));
-    $("#methodSelect").addEventListener("change", (e) => setInputValue("method_id", e.target.value));
-    $("#presetSelect").addEventListener("change", (e) => setInputValue("preset_id", e.target.value));
-    $("#flourBlend").addEventListener("change", (e) => setInputValue("flour_blend_id", e.target.value));
+    on("#plannedEat", "change", (e) => setInputValue("planned_eat_time_iso", localInputToISO(e.target.value)));
+    on("#timezone", "change", (e) => setInputValue("timezone", e.target.value || "America/Toronto"));
+    on("#doughModality", "change", (e) => setInputValue("dough_modality", e.target.value));
+    on("#styleId", "change", (e) => setInputValue("pizza_style_id", e.target.value));
+    on("#ovenSelect", "change", (e) => setInputValue("oven_id", e.target.value));
+    on("#ovenSettingSelect", "change", (e) => setInputValue("oven_setting_id", e.target.value));
+    on("#mixerSelect", "change", (e) => setInputValue("mixer_id", e.target.value));
+    on("#mixMethod", "change", (e) => setInputValue("mix_method", e.target.value));
+    on("#ovenType", "change", (e) => setInputValue("oven_type", e.target.value));
+    on("#methodSelect", "change", (e) => setInputValue("method_id", e.target.value));
+    on("#presetSelect", "change", (e) => setInputValue("preset_id", e.target.value));
+    on("#flourBlend", "change", (e) => setInputValue("flour_blend_id", e.target.value));
 
     handleNumberInput($("#ballsUsed"), "target_pizza_count", { integer: true });
     handleNumberInput($("#ballWeight"), "dough_unit_weight_g", { integer: true });
@@ -1219,13 +1269,13 @@
     handleNumberInput($("#panLength"), "pan_length_in");
     handleNumberInput($("#panWidth"), "pan_width_in");
 
-    $("#prefermentType").addEventListener("change", (e) => {
+    on("#prefermentType", "change", (e) => {
       const value = e.target.value;
       setInputValue("preferment_type", value);
       setInputValue("preferment_enabled", value !== "direct" && value !== "starter");
       setInputValue("starter_enabled", value === "starter");
     });
-    $("#prefermentEnabled").addEventListener("change", (e) => {
+    on("#prefermentEnabled", "change", (e) => {
       const enabled = e.target.value === "true";
       setInputValue("preferment_enabled", enabled);
       if (!enabled) setInputValue("preferment_type", "direct");
@@ -1249,11 +1299,11 @@
     handleNumberInput($("#starterInoculation"), "starter_inoculation_percent");
     handleNumberInput($("#starterPeak"), "starter_peak_window_hours");
 
-    $("#fermLoc").addEventListener("change", (e) => setInputValue("fermentation_location", e.target.value));
+    on("#fermLoc", "change", (e) => setInputValue("fermentation_location", e.target.value));
     handleNumberInput($("#bulkHours"), "bulk_ferment_hours");
     handleNumberInput($("#coldHours"), "cold_ferment_hours");
     handleNumberInput($("#ballHours"), "ball_or_pan_ferment_hours");
-    $("#fermTotal").addEventListener("change", (e) => {
+    on("#fermTotal", "change", (e) => {
       const total = Number(e.target.value || 0);
       if (!Number.isFinite(total) || total <= 0) return;
       const currentTotal = totalFermentHours || 1;
@@ -1265,8 +1315,8 @@
       setInputValue("ball_or_pan_ferment_hours", round(total * ballRatio, 1));
     });
 
-    $("#fermMode").addEventListener("change", (e) => {
-      const total = Number($("#fermTotal").value || 0);
+    on("#fermMode", "change", (e) => {
+      const total = Number(($("#fermTotal") || {}).value || 0);
       if (e.target.value === "single") {
         setInputValue("bulk_ferment_hours", total);
         setInputValue("cold_ferment_hours", 0);
@@ -1292,9 +1342,9 @@
     handleNumberInput($("#sugar"), "sugar_percent");
     handleNumberInput($("#malt"), "diastatic_malt_percent");
     handleNumberInput($("#yeastPct"), "yeast_percent");
-    $("#yeastType").addEventListener("change", (e) => setInputValue("yeast_type", e.target.value));
+    on("#yeastType", "change", (e) => setInputValue("yeast_type", e.target.value));
 
-    $("#ddtEnabled").addEventListener("change", (e) => setInputValue("ddt_model_enabled", e.target.value === "true"));
+    on("#ddtEnabled", "change", (e) => setInputValue("ddt_model_enabled", e.target.value === "true"));
     handleNumberInput($("#ambientTemp"), "ambient_temp_c");
     handleNumberInput($("#flourTemp"), "flour_temp_c");
     handleNumberInput($("#fridgeTemp"), "fridge_temp_c");
@@ -1303,6 +1353,7 @@
 
   function renderOrders() {
     const root = $("#tab-orders");
+    if (!root) return;
     root.innerHTML = `
       <div class="card">
         <h2>Orders</h2>
@@ -1313,6 +1364,7 @@
     `;
 
     const list = $("#orders-list");
+    if (!list) return;
     list.innerHTML = APP_STATE.orders.map((order) => `
       <div class="card" style="margin-top:10px;">
         <div class="grid-2">
@@ -1357,7 +1409,7 @@
       });
     });
 
-    $("#add-order").addEventListener("click", () => {
+    on("#add-order", "click", () => {
       APP_STATE.orders.push({ id: cryptoSafeId("order"), name: "Guest", quantity: 1, notes: "" });
       updateStateAndRender();
     });
@@ -1365,6 +1417,7 @@
 
   function renderMaking() {
     const root = $("#tab-making");
+    if (!root) return;
     const { resolved, derived } = APP_STATE.session;
     root.innerHTML = `
       <div class="card">
@@ -1381,6 +1434,7 @@
 
   function renderShopping() {
     const root = $("#tab-shopping");
+    if (!root) return;
     const { derived } = APP_STATE.session;
     root.innerHTML = `
       <div class="card">
@@ -1402,6 +1456,7 @@
 
   function renderPresets() {
     const root = $("#tab-presets");
+    if (!root) return;
     root.innerHTML = `
       <div class="card">
         <h2>Pizza Presets</h2>
@@ -1418,6 +1473,7 @@
 
   function renderDebug() {
     const root = $("#tab-debug");
+    if (!root) return;
     root.innerHTML = `
       <div class="card">
         <h2>Debug</h2>
@@ -1427,12 +1483,12 @@
   }
 
   function render() {
-    $("#tab-session").classList.toggle("active", APP_STATE.ui.activeTab === "session");
-    $("#tab-orders").classList.toggle("active", APP_STATE.ui.activeTab === "orders");
-    $("#tab-making").classList.toggle("active", APP_STATE.ui.activeTab === "making");
-    $("#tab-shopping").classList.toggle("active", APP_STATE.ui.activeTab === "shopping");
-    $("#tab-presets").classList.toggle("active", APP_STATE.ui.activeTab === "presets");
-    $("#tab-debug").classList.toggle("active", APP_STATE.ui.activeTab === "debug");
+    setActive("#tab-session", APP_STATE.ui.activeTab === "session");
+    setActive("#tab-orders", APP_STATE.ui.activeTab === "orders");
+    setActive("#tab-making", APP_STATE.ui.activeTab === "making");
+    setActive("#tab-shopping", APP_STATE.ui.activeTab === "shopping");
+    setActive("#tab-presets", APP_STATE.ui.activeTab === "presets");
+    setActive("#tab-debug", APP_STATE.ui.activeTab === "debug");
 
     renderSession();
     renderOrders();
