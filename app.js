@@ -54,6 +54,7 @@
     orders: [],
     session: {
       inputs: {},
+      userTouched: {},
       resolved: {},
       derived: {},
       warnings: [],
@@ -360,13 +361,18 @@
     return APP_STATE.catalogs.mixers.find((m) => m.id === id) || null;
   }
 
-  function deriveMethodIdFromPrefermentType(type) {
-    if (type === "poolish") return "poolish";
-    if (type === "biga") return "biga";
-    if (type === "tiga") return "tiga";
-    if (type === "hybrid_poolish_biga") return "hybrid_poolish_biga";
-    if (type === "sourdough") return "sourdough";
+  function setMethodFromPreferment(value) {
+    const normalized = (value || "").toLowerCase();
+    if (normalized === "poolish") return "poolish";
+    if (normalized === "biga") return "biga";
+    if (normalized === "tiga") return "tiga";
+    if (normalized === "hybrid_poolish_biga") return "hybrid_poolish_biga";
+    if (normalized === "sourdough" || normalized === "starter") return "sourdough";
     return "direct";
+  }
+
+  function deriveMethodIdFromPrefermentType(type) {
+    return setMethodFromPreferment(type);
   }
 
   function prefermentTypeFromMethod(methodId) {
@@ -566,6 +572,55 @@
       next[key] = value;
     });
     return next;
+  }
+
+  function markUserTouched(keys) {
+    if (!APP_STATE.session.userTouched) APP_STATE.session.userTouched = {};
+    keys.forEach((key) => {
+      APP_STATE.session.userTouched[key] = true;
+    });
+  }
+
+  function getUserOverridesFromTouched(inputs, method) {
+    const touched = APP_STATE.session.userTouched || {};
+    const overrides = {};
+    Object.entries(touched).forEach(([key, wasTouched]) => {
+      if (!wasTouched) return;
+      if (key === "preferment_type" || key === "method_id") return;
+      if (!method?.supports?.preferment && key.startsWith("preferment_")) return;
+      if (!method?.supports?.starter && key.startsWith("starter_")) return;
+      overrides[key] = inputs[key];
+    });
+    return overrides;
+  }
+
+  function buildInputsForMethodChange(nextMethod, prefermentType, presetOverrides) {
+    const currentInputs = APP_STATE.session.inputs;
+    const methodDefaults = nextMethod?.defaults || {};
+    const persistentKeys = Object.keys(BASE_INPUT_DEFAULTS).filter(
+      (key) => !Object.prototype.hasOwnProperty.call(methodDefaults, key)
+    );
+    const baseInputs = { ...BASE_INPUT_DEFAULTS };
+
+    baseInputs.planned_eat_time_iso = currentInputs.planned_eat_time_iso || getDefaultPlannedEatISO();
+    baseInputs.timezone = currentInputs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto";
+
+    persistentKeys.forEach((key) => {
+      if (currentInputs[key] !== undefined) {
+        baseInputs[key] = currentInputs[key];
+      }
+    });
+
+    let resolved = mergeOverrides(methodDefaults, presetOverrides);
+    const userOverrides = getUserOverridesFromTouched(currentInputs, nextMethod);
+    resolved = mergeOverrides(resolved, userOverrides);
+
+    const nextInputs = { ...baseInputs, ...resolved };
+    nextInputs.preferment_type = prefermentType;
+    nextInputs.method_id = nextMethod?.method_id || setMethodFromPreferment(prefermentType);
+    nextInputs.preset_id = currentInputs.preset_id;
+    syncPrefermentFlags(nextInputs, nextMethod);
+    return { nextInputs, resolved };
   }
 
   function recordPresetNotice(message) {
@@ -999,6 +1054,34 @@
     return APP_STATE.orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0);
   }
 
+  function formatLocalDateTimeDisplay(isoString) {
+    if (!isoString) return "—";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "—";
+    const offset = date.getTimezoneOffset();
+    const local = new Date(date.getTime() - offset * 60 * 1000);
+    return local.toISOString().slice(0, 16).replace("T", " ");
+  }
+
+  function computeLeadTimeMinutes(resolved) {
+    const mixMinutes = 20;
+    const ballMinutes = 15;
+    const benchMinutes = 60;
+    const bakeBufferMinutes = 20;
+    const existingDoughLeadMinutes = 45;
+
+    if (resolved.dough_modality === "existing_dough") {
+      return existingDoughLeadMinutes;
+    }
+
+    const fermentationMinutes =
+      (Number(resolved.bulk_ferment_hours || 0) +
+        Number(resolved.cold_ferment_hours || 0) +
+        Number(resolved.ball_or_pan_ferment_hours || 0)) *
+      60;
+    return fermentationMinutes + mixMinutes + ballMinutes + benchMinutes + bakeBufferMinutes;
+  }
+
   function updateStateAndRender() {
     resolveSession();
     APP_STATE.session.derived = computeDerived(APP_STATE.session.resolved, getMethodById(APP_STATE.session.resolved.method_id));
@@ -1009,7 +1092,9 @@
   function resetSessionInputs() {
     const defaultMethod = getMethodById(BASE_INPUT_DEFAULTS.method_id) || APP_STATE.methods[0];
     const defaults = normalizeInputs({}, defaultMethod?.defaults || {}, defaultMethod);
-    APP_STATE.session.inputs = defaults;
+    const styleDefaults = applyStyleDefaults(defaults.pizza_style_id);
+    APP_STATE.session.inputs = { ...defaults, ...styleDefaults };
+    APP_STATE.session.userTouched = {};
     APP_STATE.session.flags.doughWeightUserOverride = false;
     APP_STATE.session.flags.panAutoWeightEnabled = true;
     updateStateAndRender();
@@ -1033,6 +1118,11 @@
     entries.forEach(([key, value]) => {
       inputs[key] = value;
     });
+
+    if (options.trackUserTouched) {
+      const keys = options.userTouchedKeys || entries.map(([key]) => key);
+      markUserTouched(keys);
+    }
 
     updateStateAndRender();
   }
@@ -1059,23 +1149,37 @@
 
   function applyPrefermentTypeChange(value, options = {}) {
     const prevInputs = { ...APP_STATE.session.inputs };
-    const nextMethodId = deriveMethodIdFromPrefermentType(value);
+    const nextMethodId = setMethodFromPreferment(value);
     const nextMethod = getMethodById(nextMethodId) || APP_STATE.methods[0];
     const preset = getPresetById(prevInputs.preset_id);
     const presetOverrides =
       preset && prevInputs.preset_id !== CUSTOM_PRESET_ID ? preset.overrides || {} : {};
 
-    const baseInputs = buildMethodBaseInputs(nextMethod, value);
-    const withPreset = mergeOverrides(baseInputs, presetOverrides);
-    const rehydrated = applyUserOverrides(withPreset, prevInputs, nextMethod);
-    rehydrated.preferment_type = value;
-    rehydrated.method_id = nextMethodId;
+    const { nextInputs, resolved } = buildInputsForMethodChange(nextMethod, value, presetOverrides);
+    nextInputs.method_id = nextMethodId;
 
-    if (shouldMarkPresetCustom({ preferment_type: value }, options) && rehydrated.preset_id !== CUSTOM_PRESET_ID) {
-      rehydrated.preset_id = CUSTOM_PRESET_ID;
+    if (shouldMarkPresetCustom({ preferment_type: value }, options) && nextInputs.preset_id !== CUSTOM_PRESET_ID) {
+      nextInputs.preset_id = CUSTOM_PRESET_ID;
     }
 
-    APP_STATE.session.inputs = rehydrated;
+    APP_STATE.session.inputs = nextInputs;
+
+    console.info("[Session] Preferment changed -> method_id:", nextMethodId);
+    console.info(
+      "[Session] Resolved hydration/salt/yeast:",
+      resolved.hydration_percent,
+      resolved.salt_percent,
+      resolved.yeast_percent
+    );
+    const expectedHydration =
+      presetOverrides.hydration_percent ?? nextMethod?.defaults?.hydration_percent;
+    if (!APP_STATE.session.userTouched?.hydration_percent && expectedHydration != null) {
+      console.assert(
+        resolved.hydration_percent === expectedHydration,
+        "[Session] Hydration should update with preferment change."
+      );
+    }
+
     updateStateAndRender();
   }
 
@@ -1184,19 +1288,14 @@
         ? "double"
         : "single";
 
-    root.innerHTML = `
-      <div class="card" id="card-session-actions">
-        <div class="grid-2">
-          <div>
-            <strong>Session actions</strong>
-            <div class="small">Reset Pizza Party inputs without touching Orders.</div>
-          </div>
-          <div style="text-align:right;">
-            <button id="resetSession">Reset Session</button>
-          </div>
-        </div>
-      </div>
+    const leadTimeMinutes = computeLeadTimeMinutes(resolved);
+    const plannedEatTime = resolved.planned_eat_time_iso ? new Date(resolved.planned_eat_time_iso) : null;
+    const startTime = plannedEatTime
+      ? new Date(plannedEatTime.getTime() - leadTimeMinutes * 60 * 1000)
+      : null;
+    const whenToStartDisplay = startTime ? formatLocalDateTimeDisplay(startTime.toISOString()) : "—";
 
+    root.innerHTML = `
       <div class="card" id="card-dashboard">
         <h2>Pizza Party Dashboard</h2>
         <p>One dough for everyone. Orders only change how many balls you need.</p>
@@ -1205,6 +1304,7 @@
           <div class="box"><div class="small">Balls used</div><div class="v">${derived.effective_balls_used}</div></div>
           <div class="box"><div class="small">Ball weight</div><div class="v">${derived.dough_unit_weight_g} g</div></div>
           <div class="box"><div class="small">Total dough</div><div class="v">${derived.target_total_dough_g} g</div></div>
+          <div class="box"><div class="small">When to Start</div><div class="v">${whenToStartDisplay}</div><div class="small">Estimate</div></div>
         </div>
       </div>
 
@@ -1220,6 +1320,24 @@
             <label>${ballWeightLabel}</label>
             <input type="number" id="ballWeight" value="${escapeHtml(derived.dough_unit_weight_g)}">
           </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label>Dough Source</label>
+          <select id="doughModality">
+            <option value="make_dough" ${resolved.dough_modality === "make_dough" ? "selected" : ""}>Make Dough</option>
+            <option value="existing_dough" ${resolved.dough_modality === "existing_dough" ? "selected" : ""}>Use Existing Dough</option>
+          </select>
+          <div style="margin-top:10px; ${existingDough ? "" : "display:none;"}">
+            <label>Dough Status</label>
+            <select id="existingDoughState">
+              <option value="frozen" ${resolved.existing_dough_state === "frozen" ? "selected" : ""}>Frozen</option>
+              <option value="thawed" ${resolved.existing_dough_state === "thawed" ? "selected" : ""}>Thawed</option>
+              <option value="store_bought" ${resolved.existing_dough_state === "store_bought" ? "selected" : ""}>Store-bought</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px; text-align:right;">
+          <button class="tab-btn" id="resetSession">Reset Session</button>
         </div>
       </div>
 
@@ -1277,33 +1395,10 @@
 
       <div class="card" id="card-fermentation">
         <h3>Dough Configuration</h3>
+        ${existingDough ? "" : `
         <div class="grid-2">
           <div>
-            <label>Dough modality</label>
-            <select id="doughModality">
-              <option value="make_dough" ${resolved.dough_modality === "make_dough" ? "selected" : ""}>Make dough</option>
-              <option value="existing_dough" ${resolved.dough_modality === "existing_dough" ? "selected" : ""}>Use existing dough</option>
-            </select>
-          </div>
-          <div>
-            <label>Style</label>
-            <select id="styleId">
-              <option value="neapolitan_round" ${resolved.pizza_style_id === "neapolitan_round" ? "selected" : ""}>Neapolitan Round</option>
-              <option value="teglia_bonci" ${resolved.pizza_style_id === "teglia_bonci" ? "selected" : ""}>Pan / Teglia</option>
-            </select>
-            <div class="small">Pan style sets dough weight defaults.</div>
-          </div>
-          <div>
-            <label>Dough preset</label>
-            <select id="presetSelect">
-              ${APP_STATE.presets.map((p) => `
-                <option value="${p.id}" ${p.id === resolved.preset_id ? "selected" : ""}>${escapeHtml(p.label)}</option>
-              `).join("")}
-            </select>
-            <div class="small">${escapeHtml(preset?.label || "")}</div>
-          </div>
-          <div>
-            <label>Preferment type</label>
+            <label>Preferment</label>
             <select id="prefermentType">
               <option value="direct" ${resolved.preferment_type === "direct" ? "selected" : ""}>None (Direct)</option>
               <option value="poolish" ${resolved.preferment_type === "poolish" ? "selected" : ""}>Poolish</option>
@@ -1313,21 +1408,116 @@
               <option value="sourdough" ${resolved.preferment_type === "sourdough" ? "selected" : ""}>Sourdough Starter</option>
             </select>
           </div>
-          ${existingDough ? `
           <div>
-            <label>Existing dough condition</label>
-            <select id="existingDoughState">
-              <option value="frozen" ${resolved.existing_dough_state === "frozen" ? "selected" : ""}>Frozen</option>
-              <option value="thawed" ${resolved.existing_dough_state === "thawed" ? "selected" : ""}>Thawed</option>
-              <option value="store_bought" ${resolved.existing_dough_state === "store_bought" ? "selected" : ""}>Store bought</option>
+            <label>Dough Preset</label>
+            <select id="presetSelect">
+              ${APP_STATE.presets.map((p) => `
+                <option value="${p.id}" ${p.id === resolved.preset_id ? "selected" : ""}>${escapeHtml(p.label)}</option>
+              `).join("")}
             </select>
+            <div class="small">${escapeHtml(preset?.label || "")}</div>
           </div>
-          ` : `
-          <div>
-            <div class="small">Method is derived from your Preferment Type selection.</div>
-            <div class="small" style="margin-top:6px;">Current method: ${escapeHtml(method?.display_name || "—")}</div>
+        </div>
+        ` : ""}
+        <div style="margin-top:12px;">
+          <label>Pizza Style</label>
+          <select id="styleId">
+            <option value="neapolitan_round" ${resolved.pizza_style_id === "neapolitan_round" ? "selected" : ""}>Neapolitan Round</option>
+            <option value="teglia_bonci" ${resolved.pizza_style_id === "teglia_bonci" ? "selected" : ""}>Pan / Teglia</option>
+          </select>
+          <div class="small">Pan style sets dough weight defaults.</div>
+        </div>
+        <div class="card" style="margin-top:12px; ${existingDough || !showPrefermentCard ? "display:none;" : ""}">
+          <h4>Preferment Options</h4>
+          <div class="grid-2">
+            ${showPrefermentFields ? `
+            <div>
+              <label>Preferment flour % of total</label>
+              <input type="number" id="prefFlourPct" value="${escapeHtml(resolved.preferment_flour_percent_of_total ?? "")}">
+            </div>
+            <div>
+              <label>Preferment hydration %</label>
+              <input type="number" id="prefHydration" value="${escapeHtml(resolved.preferment_hydration_percent ?? "")}">
+            </div>
+            <div>
+              <label>Preferment mature hours</label>
+              <input type="number" id="prefMature" value="${escapeHtml(resolved.preferment_mature_hours ?? "")}">
+            </div>
+            ` : ""}
+            ${showHybridFields ? `
+            <div>
+              <label>Hybrid poolish share %</label>
+              <input type="number" id="poolishShare" value="${escapeHtml(resolved.hybrid_poolish_share_percent ?? "")}">
+            </div>
+            <div>
+              <label>Hybrid biga share %</label>
+              <input type="number" id="bigaShare" value="${escapeHtml(resolved.hybrid_biga_share_percent ?? "")}">
+            </div>
+            <div>
+              <label>Poolish hydration %</label>
+              <input type="number" id="poolishHydration" value="${escapeHtml(resolved.poolish_hydration_percent ?? "")}">
+            </div>
+            <div>
+              <label>Biga hydration %</label>
+              <input type="number" id="bigaHydration" value="${escapeHtml(resolved.biga_hydration_percent ?? "")}">
+            </div>
+            ` : ""}
+            ${showStarterFields ? `
+            <div>
+              <label>Starter hydration %</label>
+              <input type="number" id="starterHydration" value="${escapeHtml(resolved.starter_hydration_percent ?? "")}">
+            </div>
+            <div>
+              <label>Starter inoculation %</label>
+              <input type="number" id="starterInoculation" value="${escapeHtml(resolved.starter_inoculation_percent ?? "")}">
+            </div>
+            <div>
+              <label>Starter peak window hours</label>
+              <input type="number" id="starterPeak" value="${escapeHtml(resolved.starter_peak_window_hours ?? "")}">
+            </div>
+            ` : ""}
           </div>
-          `}
+        </div>
+        <div class="card" style="margin-top:12px; ${existingDough ? "display:none;" : ""}">
+          <h4>Ingredient Configuration</h4>
+          <div class="grid-2">
+            <div>
+              <label>Hydration %</label>
+              <input type="number" id="hydration" value="${escapeHtml(resolved.hydration_percent)}">
+            </div>
+            <div>
+              <label>Salt %</label>
+              <input type="number" id="salt" value="${escapeHtml(resolved.salt_percent)}">
+            </div>
+            <div>
+              <label>Oil %</label>
+              <input type="number" id="oil" class="${safetyWarnings.oil_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.oil_percent)}">
+            </div>
+            <div>
+              <label>Honey %</label>
+              <input type="number" id="honey" class="${safetyWarnings.honey_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.honey_percent)}">
+            </div>
+            <div>
+              <label>Sugar %</label>
+              <input type="number" id="sugar" class="${safetyWarnings.sugar_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.sugar_percent)}">
+            </div>
+            <div>
+              <label>Diastatic malt %</label>
+              <input type="number" id="malt" class="${safetyWarnings.diastatic_malt_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.diastatic_malt_percent)}">
+            </div>
+            <div>
+              <label>Yeast % (IDY equiv)</label>
+              <input type="number" id="yeastPct" value="${escapeHtml(resolved.yeast_percent)}">
+            </div>
+            <div>
+              <label>Yeast type</label>
+              <select id="yeastType">
+                ${(APP_STATE.methodsJson?.enums?.yeast_type || ["idy", "ady", "fresh", "starter_only", "starter_plus_yeast"]).map((type) => `
+                  <option value="${type}" ${resolved.yeast_type === type ? "selected" : ""}>${escapeHtml(type)}</option>
+                `).join("")}
+              </select>
+            </div>
+          </div>
         </div>
         ${existingDough ? "" : `
         <div class="card" style="margin-top:12px;">
@@ -1376,133 +1566,6 @@
       <div class="card" id="card-warnings" style="${existingDough ? "display:none;" : ""}">
         <h3>Warnings</h3>
         <div id="session-warnings"></div>
-      </div>
-
-      <div class="card" id="card-preferment" style="${existingDough || !showPrefermentCard ? "display:none;" : ""}">
-        <h3>Preferment Options</h3>
-        <div class="grid-2">
-          ${showPrefermentFields ? `
-          <div>
-            <label>Preferment flour % of total</label>
-            <input type="number" id="prefFlourPct" value="${escapeHtml(resolved.preferment_flour_percent_of_total ?? "")}">
-          </div>
-          <div>
-            <label>Preferment hydration %</label>
-            <input type="number" id="prefHydration" value="${escapeHtml(resolved.preferment_hydration_percent ?? "")}">
-          </div>
-          <div>
-            <label>Preferment mature hours</label>
-            <input type="number" id="prefMature" value="${escapeHtml(resolved.preferment_mature_hours ?? "")}">
-          </div>
-          ` : ""}
-          ${showHybridFields ? `
-          <div>
-            <label>Hybrid poolish share %</label>
-            <input type="number" id="poolishShare" value="${escapeHtml(resolved.hybrid_poolish_share_percent ?? "")}">
-          </div>
-          <div>
-            <label>Hybrid biga share %</label>
-            <input type="number" id="bigaShare" value="${escapeHtml(resolved.hybrid_biga_share_percent ?? "")}">
-          </div>
-          <div>
-            <label>Poolish hydration %</label>
-            <input type="number" id="poolishHydration" value="${escapeHtml(resolved.poolish_hydration_percent ?? "")}">
-          </div>
-          <div>
-            <label>Biga hydration %</label>
-            <input type="number" id="bigaHydration" value="${escapeHtml(resolved.biga_hydration_percent ?? "")}">
-          </div>
-          ` : ""}
-          ${showStarterFields ? `
-          <div>
-            <label>Starter hydration %</label>
-            <input type="number" id="starterHydration" value="${escapeHtml(resolved.starter_hydration_percent ?? "")}">
-          </div>
-          <div>
-            <label>Starter inoculation %</label>
-            <input type="number" id="starterInoculation" value="${escapeHtml(resolved.starter_inoculation_percent ?? "")}">
-          </div>
-          <div>
-            <label>Starter peak window hours</label>
-            <input type="number" id="starterPeak" value="${escapeHtml(resolved.starter_peak_window_hours ?? "")}">
-          </div>
-          ` : ""}
-        </div>
-      </div>
-
-      <div class="card" id="card-formula" style="${existingDough ? "display:none;" : ""}">
-        <h3>Ingredient Configuration</h3>
-        <div class="grid-2">
-          <div>
-            <label>Hydration %</label>
-            <input type="number" id="hydration" value="${escapeHtml(resolved.hydration_percent)}">
-          </div>
-          <div>
-            <label>Salt %</label>
-            <input type="number" id="salt" value="${escapeHtml(resolved.salt_percent)}">
-          </div>
-          <div>
-            <label>Oil %</label>
-            <input type="number" id="oil" class="${safetyWarnings.oil_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.oil_percent)}">
-          </div>
-          <div>
-            <label>Honey %</label>
-            <input type="number" id="honey" class="${safetyWarnings.honey_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.honey_percent)}">
-          </div>
-          <div>
-            <label>Sugar %</label>
-            <input type="number" id="sugar" class="${safetyWarnings.sugar_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.sugar_percent)}">
-          </div>
-          <div>
-            <label>Diastatic malt %</label>
-            <input type="number" id="malt" class="${safetyWarnings.diastatic_malt_percent ? "input-warning" : ""}" value="${escapeHtml(resolved.diastatic_malt_percent)}">
-          </div>
-          <div>
-            <label>Yeast % (IDY equiv)</label>
-            <input type="number" id="yeastPct" value="${escapeHtml(resolved.yeast_percent)}">
-          </div>
-          <div>
-            <label>Yeast type</label>
-            <select id="yeastType">
-              ${(APP_STATE.methodsJson?.enums?.yeast_type || ["idy", "ady", "fresh", "starter_only", "starter_plus_yeast"]).map((type) => `
-                <option value="${type}" ${resolved.yeast_type === type ? "selected" : ""}>${escapeHtml(type)}</option>
-              `).join("")}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="card" id="card-temperature" style="${existingDough ? "display:none;" : ""}">
-        <h3>Temperature Planning (DDT)</h3>
-        <div class="grid-2">
-          <div>
-            <label>DDT model enabled</label>
-            <select id="ddtEnabled">
-              <option value="true" ${resolved.ddt_model_enabled ? "selected" : ""}>Yes</option>
-              <option value="false" ${!resolved.ddt_model_enabled ? "selected" : ""}>No</option>
-            </select>
-          </div>
-          <div>
-            <label>Room temp (°C)</label>
-            <input type="number" id="ambientTemp" value="${escapeHtml(resolved.ambient_temp_c)}">
-          </div>
-          <div>
-            <label>Flour temp (°C)</label>
-            <input type="number" id="flourTemp" value="${escapeHtml(resolved.flour_temp_c)}">
-          </div>
-          <div>
-            <label>Fridge temp (°C)</label>
-            <input type="number" id="fridgeTemp" value="${escapeHtml(resolved.fridge_temp_c)}">
-          </div>
-          <div>
-            <label>Target DDT (°C)</label>
-            <input type="number" id="targetFDT" value="${escapeHtml(resolved.target_fdt_c)}">
-          </div>
-          <div>
-            <label>Recommended water temp (°C)</label>
-            <input type="text" id="waterRec" value="${derived.recommended_water_temp_c ?? "—"}" disabled>
-          </div>
-        </div>
       </div>
 
       <div class="card" id="card-ingredients" style="${existingDough ? "display:none;" : ""}">
@@ -1569,7 +1632,7 @@
       if (!Number.isFinite(value)) return;
       APP_STATE.session.flags.doughWeightUserOverride = true;
       if (isPan) APP_STATE.session.flags.panAutoWeightEnabled = false;
-      applyInputChanges({ dough_unit_weight_g: Math.round(value) });
+      applyInputChanges({ dough_unit_weight_g: Math.round(value) }, { trackUserTouched: true });
     });
     on("#panLength", "change", (e) => {
       const raw = e.target.value;
@@ -1598,21 +1661,21 @@
       const value = e.target.value;
       applyPrefermentTypeChange(value, { markPresetCustom: true });
     });
-    handleNumberInput($("#prefFlourPct"), "preferment_flour_percent_of_total");
-    handleNumberInput($("#prefHydration"), "preferment_hydration_percent");
-    handleNumberInput($("#prefMature"), "preferment_mature_hours");
-    handleNumberInput($("#poolishShare"), "hybrid_poolish_share_percent");
-    handleNumberInput($("#bigaShare"), "hybrid_biga_share_percent");
-    handleNumberInput($("#poolishHydration"), "poolish_hydration_percent");
-    handleNumberInput($("#bigaHydration"), "biga_hydration_percent");
-    handleNumberInput($("#starterHydration"), "starter_hydration_percent");
-    handleNumberInput($("#starterInoculation"), "starter_inoculation_percent");
-    handleNumberInput($("#starterPeak"), "starter_peak_window_hours");
+    handleNumberInput($("#prefFlourPct"), "preferment_flour_percent_of_total", { trackUserTouched: true });
+    handleNumberInput($("#prefHydration"), "preferment_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#prefMature"), "preferment_mature_hours", { trackUserTouched: true });
+    handleNumberInput($("#poolishShare"), "hybrid_poolish_share_percent", { trackUserTouched: true });
+    handleNumberInput($("#bigaShare"), "hybrid_biga_share_percent", { trackUserTouched: true });
+    handleNumberInput($("#poolishHydration"), "poolish_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#bigaHydration"), "biga_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#starterHydration"), "starter_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#starterInoculation"), "starter_inoculation_percent", { trackUserTouched: true });
+    handleNumberInput($("#starterPeak"), "starter_peak_window_hours", { trackUserTouched: true });
 
-    on("#fermLoc", "change", (e) => applyInputChanges({ fermentation_location: e.target.value }));
-    handleNumberInput($("#bulkHours"), "bulk_ferment_hours");
-    handleNumberInput($("#coldHours"), "cold_ferment_hours");
-    handleNumberInput($("#ballHours"), "ball_or_pan_ferment_hours");
+    on("#fermLoc", "change", (e) => applyInputChanges({ fermentation_location: e.target.value }, { trackUserTouched: true }));
+    handleNumberInput($("#bulkHours"), "bulk_ferment_hours", { trackUserTouched: true });
+    handleNumberInput($("#coldHours"), "cold_ferment_hours", { trackUserTouched: true });
+    handleNumberInput($("#ballHours"), "ball_or_pan_ferment_hours", { trackUserTouched: true });
     on("#fermTotal", "change", (e) => {
       const total = Number(e.target.value || 0);
       if (!Number.isFinite(total)) return;
@@ -1621,7 +1684,7 @@
           bulk_ferment_hours: 0,
           cold_ferment_hours: 0,
           ball_or_pan_ferment_hours: 0
-        });
+        }, { trackUserTouched: true });
         return;
       }
       const currentTotal = totalFermentHours || 1;
@@ -1632,7 +1695,7 @@
         bulk_ferment_hours: round(total * bulkRatio, 1),
         cold_ferment_hours: round(total * coldRatio, 1),
         ball_or_pan_ferment_hours: round(total * ballRatio, 1)
-      });
+      }, { trackUserTouched: true });
     });
 
     on("#fermMode", "change", (e) => {
@@ -1642,7 +1705,7 @@
           bulk_ferment_hours: total,
           cold_ferment_hours: 0,
           ball_or_pan_ferment_hours: 0
-        });
+        }, { trackUserTouched: true });
         return;
       }
       const defaults = method?.defaults || {};
@@ -1655,24 +1718,18 @@
           bulk_ferment_hours: round(total * (defaults.bulk_ferment_hours / defaultTotal), 1),
           cold_ferment_hours: round(total * (defaults.cold_ferment_hours / defaultTotal), 1),
           ball_or_pan_ferment_hours: round(total * (defaults.ball_or_pan_ferment_hours / defaultTotal), 1)
-        });
+        }, { trackUserTouched: true });
       }
     });
 
-    handleNumberInput($("#hydration"), "hydration_percent");
-    handleNumberInput($("#salt"), "salt_percent");
-    handleNumberInput($("#oil"), "oil_percent");
-    handleNumberInput($("#honey"), "honey_percent");
-    handleNumberInput($("#sugar"), "sugar_percent");
-    handleNumberInput($("#malt"), "diastatic_malt_percent");
-    handleNumberInput($("#yeastPct"), "yeast_percent");
-    on("#yeastType", "change", (e) => applyInputChanges({ yeast_type: e.target.value }));
-
-    on("#ddtEnabled", "change", (e) => applyInputChanges({ ddt_model_enabled: e.target.value === "true" }));
-    handleNumberInput($("#ambientTemp"), "ambient_temp_c");
-    handleNumberInput($("#flourTemp"), "flour_temp_c");
-    handleNumberInput($("#fridgeTemp"), "fridge_temp_c");
-    handleNumberInput($("#targetFDT"), "target_fdt_c");
+    handleNumberInput($("#hydration"), "hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#salt"), "salt_percent", { trackUserTouched: true });
+    handleNumberInput($("#oil"), "oil_percent", { trackUserTouched: true });
+    handleNumberInput($("#honey"), "honey_percent", { trackUserTouched: true });
+    handleNumberInput($("#sugar"), "sugar_percent", { trackUserTouched: true });
+    handleNumberInput($("#malt"), "diastatic_malt_percent", { trackUserTouched: true });
+    handleNumberInput($("#yeastPct"), "yeast_percent", { trackUserTouched: true });
+    on("#yeastType", "change", (e) => applyInputChanges({ yeast_type: e.target.value }, { trackUserTouched: true }));
   }
 
   function renderOrders() {
@@ -1743,6 +1800,7 @@
     const root = $("#tab-making");
     if (!root) return;
     const { resolved, derived } = APP_STATE.session;
+    const existingDough = resolved.dough_modality === "existing_dough";
     root.innerHTML = `
       <div class="card">
         <h2>Pizzaiolo</h2>
@@ -1753,7 +1811,47 @@
           <div class="box"><div class="small">Yeast type</div><div class="v">${escapeHtml(resolved.yeast_type)}</div></div>
         </div>
       </div>
+      ${existingDough ? "" : `
+      <div class="card">
+        <h3>Temperature Planning (DDT)</h3>
+        <div class="grid-2">
+          <div>
+            <label>DDT model enabled</label>
+            <select id="ddtEnabled">
+              <option value="true" ${resolved.ddt_model_enabled ? "selected" : ""}>Yes</option>
+              <option value="false" ${!resolved.ddt_model_enabled ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div>
+            <label>Room temp (°C)</label>
+            <input type="number" id="ambientTemp" value="${escapeHtml(resolved.ambient_temp_c)}">
+          </div>
+          <div>
+            <label>Flour temp (°C)</label>
+            <input type="number" id="flourTemp" value="${escapeHtml(resolved.flour_temp_c)}">
+          </div>
+          <div>
+            <label>Fridge temp (°C)</label>
+            <input type="number" id="fridgeTemp" value="${escapeHtml(resolved.fridge_temp_c)}">
+          </div>
+          <div>
+            <label>Target DDT (°C)</label>
+            <input type="number" id="targetFDT" value="${escapeHtml(resolved.target_fdt_c)}">
+          </div>
+          <div>
+            <label>Recommended water temp (°C)</label>
+            <input type="text" id="waterRec" value="${derived.recommended_water_temp_c ?? "—"}" disabled>
+          </div>
+        </div>
+      </div>
+      `}
     `;
+
+    on("#ddtEnabled", "change", (e) => applyInputChanges({ ddt_model_enabled: e.target.value === "true" }, { trackUserTouched: true }));
+    handleNumberInput($("#ambientTemp"), "ambient_temp_c", { trackUserTouched: true });
+    handleNumberInput($("#flourTemp"), "flour_temp_c", { trackUserTouched: true });
+    handleNumberInput($("#fridgeTemp"), "fridge_temp_c", { trackUserTouched: true });
+    handleNumberInput($("#targetFDT"), "target_fdt_c", { trackUserTouched: true });
   }
 
   function renderShopping() {
@@ -1813,6 +1911,9 @@
     setActive("#tab-shopping", APP_STATE.ui.activeTab === "shopping");
     setActive("#tab-presets", APP_STATE.ui.activeTab === "presets");
     setActive("#tab-debug", APP_STATE.ui.activeTab === "debug");
+    $$("#tabs .tab-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.tab === APP_STATE.ui.activeTab);
+    });
 
     renderSession();
     renderOrders();
