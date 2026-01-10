@@ -1398,6 +1398,14 @@ function renderSession() {
           <option value="make_dough" ${resolved.dough_modality === "make_dough" ? "selected" : ""}>Make Dough</option>
           <option value="existing_dough" ${resolved.dough_modality === "existing_dough" ? "selected" : ""}>Use Existing Dough</option>
         </select>
+        <div style="margin-top:10px;">
+          <label>Pizza Style</label>
+          <select id="styleId">
+            <option value="neapolitan_round" ${resolved.pizza_style_id === "neapolitan_round" ? "selected" : ""}>Neapolitan Round</option>
+            <option value="teglia_bonci" ${resolved.pizza_style_id === "teglia_bonci" ? "selected" : ""}>Pan / Teglia</option>
+          </select>
+          <div class="small">Pan style sets dough weight defaults.</div>
+        </div>
         <div style="margin-top:10px; ${existingDough ? "" : "display:none;"}">
           <label>Dough Status</label>
           <select id="existingDoughState">
@@ -1486,15 +1494,6 @@ function renderSession() {
         </div>
       </div>
       `}
-
-      <div style="margin-top:12px;">
-        <label>Pizza Style</label>
-        <select id="styleId">
-          <option value="neapolitan_round" ${resolved.pizza_style_id === "neapolitan_round" ? "selected" : ""}>Neapolitan Round</option>
-          <option value="teglia_bonci" ${resolved.pizza_style_id === "teglia_bonci" ? "selected" : ""}>Pan / Teglia</option>
-        </select>
-        <div class="small">Pan style sets dough weight defaults.</div>
-      </div>
 
       <div class="card" style="margin-top:12px; ${existingDough || !showPrefermentCard ? "display:none;" : ""}">
         <h4>Preferment Options</h4>
@@ -1912,7 +1911,7 @@ function renderSession() {
       <div class="card">
         <h3>Temperature Planning (DDT)</h3>
         <div class="grid-2">
-          <div>
+          <div class="is-hidden">
             <label>DDT model enabled</label>
             <select id="ddtEnabled">
               <option value="true" ${resolved.ddt_model_enabled ? "selected" : ""}>Yes</option>
