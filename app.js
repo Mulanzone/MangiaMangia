@@ -223,10 +223,7 @@
     const res = await fetch(path, { cache: "no-store" });
     if (!res.ok) throw new Error(`Failed to load ${path}`);
     const text = await res.text();
-    const cleaned = text
-      .replace(/^\uFEFF/, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-    return JSON.parse(cleaned);
+    return JSON.parse(stripJsonComments(text));
   }
 
   function getMethodById(id) {
