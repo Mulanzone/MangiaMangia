@@ -1048,11 +1048,223 @@
       ? round(resolved.target_fdt_c * 3 - (resolved.ambient_temp_c + resolved.flour_temp_c + frictionFactorC), 1)
       : null;
 
+    derived.toppings_totals = computeToppingsTotals();
+
     return derived;
   }
 
   function totalPizzasFromOrders() {
     return APP_STATE.orders.reduce((sum, order) => sum + Number(order.quantity || 0), 0);
+  }
+
+  function getOrderPresetChoices() {
+    const presets = APP_STATE.presets || [];
+    const nonCustom = presets.filter((preset) => preset.id !== CUSTOM_PRESET_ID);
+    return nonCustom.length ? nonCustom : presets;
+  }
+
+  function getDefaultOrderPresetId() {
+    return getOrderPresetChoices()[0]?.id || CUSTOM_PRESET_ID;
+  }
+
+  function getNextOrderPresetId(order) {
+    const presets = getOrderPresetChoices();
+    const used = new Set((order.pizzas || []).map((pizza) => pizza.preset_id));
+    const next = presets.find((preset) => !used.has(preset.id));
+    return next?.id || getDefaultOrderPresetId();
+  }
+
+  function normalizePizzaCount(value) {
+    const count = Math.round(Number(value) || 0);
+    return Math.max(1, count);
+  }
+
+  function sumPizzaCounts(pizzas) {
+    return pizzas.reduce((sum, pizza) => sum + Number(pizza.count || 0), 0);
+  }
+
+  function mergeDuplicatePizzaPresets(order) {
+    const merged = new Map();
+    const next = [];
+    order.pizzas.forEach((pizza) => {
+      if (!pizza) return;
+      const presetId = pizza.preset_id;
+      if (merged.has(presetId)) {
+        const keeper = merged.get(presetId);
+        keeper.count += pizza.count;
+        if (order.lastEditedPizzaId === pizza.id) {
+          order.lastEditedPizzaId = keeper.id;
+        }
+        return;
+      }
+      merged.set(presetId, pizza);
+      next.push(pizza);
+    });
+    order.pizzas = next;
+  }
+
+  function normalizeOrderPizzas(order) {
+    const defaultPresetId = getDefaultOrderPresetId();
+    const allowedPresets = new Set(getOrderPresetChoices().map((preset) => preset.id));
+    order.pizzas = Array.isArray(order.pizzas) ? order.pizzas : [];
+    order.pizzas = order.pizzas
+      .map((pizza) => {
+        if (!pizza || typeof pizza !== "object") return null;
+        const presetId = allowedPresets.has(pizza.preset_id) ? pizza.preset_id : defaultPresetId;
+        return {
+          id: pizza.id || cryptoSafeId("pizza"),
+          preset_id: presetId,
+          count: normalizePizzaCount(pizza.count)
+        };
+      })
+      .filter(Boolean);
+    mergeDuplicatePizzaPresets(order);
+    if (order.quantity <= 0) {
+      order.quantity = 0;
+      order.pizzas = [];
+      return;
+    }
+    if (!order.pizzas.length) {
+      order.pizzas = [
+        {
+          id: cryptoSafeId("pizza"),
+          preset_id: defaultPresetId,
+          count: Math.max(1, Math.round(order.quantity))
+        }
+      ];
+      return;
+    }
+    const currentTotal = sumPizzaCounts(order.pizzas);
+    if (currentTotal !== order.quantity) {
+      reconcileOrderQuantity(order, order.quantity, currentTotal);
+    }
+  }
+
+  function normalizeOrdersData() {
+    if (!APP_STATE.presets?.length) return;
+    APP_STATE.orders = APP_STATE.orders || [];
+    APP_STATE.orders.forEach((order) => {
+      order.pizzas = order.pizzas || [];
+      normalizeOrderPizzas(order);
+    });
+  }
+
+  function getOrderPresetOptionsHtml(selectedId) {
+    const presets = getOrderPresetChoices();
+    const fallbackId = presets[0]?.id || CUSTOM_PRESET_ID;
+    const safeSelected = presets.some((preset) => preset.id === selectedId) ? selectedId : fallbackId;
+    return presets
+      .map((preset) => {
+        const id = escapeHtml(preset.id);
+        const label = escapeHtml(preset.label);
+        const selected = preset.id === safeSelected ? "selected" : "";
+        return `<option value="${id}" ${selected}>${label}</option>`;
+      })
+      .join("");
+  }
+
+  function renderPresetToppingsHtml(preset) {
+    const toppings = preset?.toppings || [];
+    if (!toppings.length) {
+      return "<div class=\"small\">No toppings defined.</div>";
+    }
+    return `
+      <ul class="small" style="margin:0; padding-left:16px;">
+        ${toppings
+          .map((topping) => {
+            const label = escapeHtml(topping.label || topping.id);
+            const grams = escapeHtml(topping.grams_per_pizza ?? "0");
+            return `<li>${label} (${grams} g)</li>`;
+          })
+          .join("")}
+      </ul>
+    `;
+  }
+
+  function reconcileOrderQuantity(order, nextQuantity, currentTotal = sumPizzaCounts(order.pizzas)) {
+    const quantity = Math.max(0, Math.round(Number(nextQuantity) || 0));
+    const defaultPresetId = getDefaultOrderPresetId();
+    if (quantity <= 0) {
+      order.quantity = 0;
+      order.pizzas = [];
+      return;
+    }
+    if (!order.pizzas.length) {
+      order.pizzas = [
+        {
+          id: cryptoSafeId("pizza"),
+          preset_id: defaultPresetId,
+          count: quantity
+        }
+      ];
+      order.quantity = quantity;
+      return;
+    }
+    let diff = quantity - currentTotal;
+    if (diff > 0) {
+      const preferred = order.pizzas.find((pizza) => pizza.id === order.lastEditedPizzaId);
+      const target = preferred || order.pizzas[0];
+      target.count += diff;
+    } else if (diff < 0) {
+      let remaining = Math.abs(diff);
+      for (let idx = order.pizzas.length - 1; idx >= 0 && remaining > 0; idx -= 1) {
+        const pizza = order.pizzas[idx];
+        const reduceBy = Math.min(pizza.count, remaining);
+        pizza.count -= reduceBy;
+        remaining -= reduceBy;
+        if (pizza.count <= 0) {
+          order.pizzas.splice(idx, 1);
+        }
+      }
+    }
+    mergeDuplicatePizzaPresets(order);
+    if (!order.pizzas.length) {
+      order.pizzas = [
+        {
+          id: cryptoSafeId("pizza"),
+          preset_id: defaultPresetId,
+          count: quantity
+        }
+      ];
+    }
+    order.quantity = quantity;
+  }
+
+  function adjustCountsForNewPizza(order, newPizzaId) {
+    const total = sumPizzaCounts(order.pizzas);
+    const diff = total - order.quantity;
+    if (diff <= 0) return;
+    let remaining = diff;
+    for (let idx = order.pizzas.length - 1; idx >= 0 && remaining > 0; idx -= 1) {
+      const pizza = order.pizzas[idx];
+      if (pizza.id === newPizzaId) continue;
+      const reduceBy = Math.min(pizza.count, remaining);
+      pizza.count -= reduceBy;
+      remaining -= reduceBy;
+      if (pizza.count <= 0) {
+        order.pizzas.splice(idx, 1);
+      }
+    }
+  }
+
+  function computeToppingsTotals() {
+    const totals = {};
+    APP_STATE.orders.forEach((order) => {
+      (order.pizzas || []).forEach((pizza) => {
+        const preset = getPresetById(pizza.preset_id);
+        const toppings = preset?.toppings || [];
+        toppings.forEach((topping) => {
+          const grams = Number(topping.grams_per_pizza || 0);
+          const count = Number(pizza.count || 0);
+          if (!Number.isFinite(grams) || !Number.isFinite(count) || grams <= 0 || count <= 0) return;
+          if (!totals[topping.id]) {
+            totals[topping.id] = { label: topping.label || topping.id, total_g: 0 };
+          }
+          totals[topping.id].total_g = round(totals[topping.id].total_g + grams * count, 1);
+        });
+      });
+    });
+    return totals;
   }
 
   function formatLocalDateTimeDisplay(isoString) {
@@ -1084,6 +1296,7 @@
   }
 
   function updateStateAndRender() {
+    normalizeOrdersData();
     resolveSession();
     APP_STATE.session.derived = computeDerived(APP_STATE.session.resolved, getMethodById(APP_STATE.session.resolved.method_id));
     saveState();
@@ -1468,10 +1681,10 @@ function renderSession() {
     </div>
     ` : ""}
 
-    <div class="card" id="card-fermentation" style="${existingDough ? "display:none;" : ""}">
+    ${existingDough ? "" : `
+    <div class="card" id="card-fermentation">
       <h3>Dough Configuration</h3>
 
-      ${existingDough ? "" : `
       <div class="grid-2">
         <div>
           <label>Preferment</label>
@@ -1493,7 +1706,6 @@ function renderSession() {
           <div class="small">${escapeHtml(preset?.label || "")}</div>
         </div>
       </div>
-      `}
 
       <div class="card" style="margin-top:12px; ${existingDough || !showPrefermentCard ? "display:none;" : ""}">
         <h4>Preferment Options</h4>
@@ -1628,6 +1840,7 @@ function renderSession() {
       </div>
       `}
     </div>
+    `}
 
     <div class="card" id="card-warnings" style="${existingDough ? "display:none;" : ""}">
       <h3>Warnings</h3>
@@ -1678,11 +1891,6 @@ function renderSession() {
     const defaults = applyStyleDefaults(nextStyle);
     applyInputChanges({ pizza_style_id: nextStyle, ...defaults });
   });
-  on("#presetSelect", "change", (e) => {
-    const presetNext = getPresetById(e.target.value);
-    applyPresetSelection(presetNext);
-    updateStateAndRender();
-  });
   on("#ovenSelect", "change", (e) => applyInputChanges({ oven_id: e.target.value }));
   on("#ovenSettingSelect", "change", (e) => applyInputChanges({ oven_setting_id: e.target.value }));
   on("#mixerSelect", "change", (e) => {
@@ -1726,111 +1934,120 @@ function renderSession() {
     applyInputChanges({ pan_width_in: value });
   });
 
-  on("#prefermentType", "change", (e) => {
-    const value = e.target.value;
-    applyPrefermentTypeChange(value, { markPresetCustom: true });
-  });
+  if (!existingDough) {
+    on("#presetSelect", "change", (e) => {
+      const presetNext = getPresetById(e.target.value);
+      applyPresetSelection(presetNext);
+      updateStateAndRender();
+    });
 
-  handleNumberInput($("#prefFlourPct"), "preferment_flour_percent_of_total", { trackUserTouched: true });
-  handleNumberInput($("#prefHydration"), "preferment_hydration_percent", { trackUserTouched: true });
-  handleNumberInput($("#prefMature"), "preferment_mature_hours", { trackUserTouched: true });
-  handleNumberInput($("#poolishShare"), "hybrid_poolish_share_percent", { trackUserTouched: true });
-  handleNumberInput($("#bigaShare"), "hybrid_biga_share_percent", { trackUserTouched: true });
-  handleNumberInput($("#poolishHydration"), "poolish_hydration_percent", { trackUserTouched: true });
-  handleNumberInput($("#bigaHydration"), "biga_hydration_percent", { trackUserTouched: true });
-  handleNumberInput($("#starterHydration"), "starter_hydration_percent", { trackUserTouched: true });
-  handleNumberInput($("#starterInoculation"), "starter_inoculation_percent", { trackUserTouched: true });
-  handleNumberInput($("#starterPeak"), "starter_peak_window_hours", { trackUserTouched: true });
+    on("#prefermentType", "change", (e) => {
+      const value = e.target.value;
+      applyPrefermentTypeChange(value, { markPresetCustom: true });
+    });
 
-  on("#fermLoc", "change", (e) =>
-    applyInputChanges({ fermentation_location: e.target.value }, { trackUserTouched: true })
-  );
-  handleNumberInput($("#bulkHours"), "bulk_ferment_hours", { trackUserTouched: true });
-  handleNumberInput($("#coldHours"), "cold_ferment_hours", { trackUserTouched: true });
-  handleNumberInput($("#ballHours"), "ball_or_pan_ferment_hours", { trackUserTouched: true });
+    handleNumberInput($("#prefFlourPct"), "preferment_flour_percent_of_total", { trackUserTouched: true });
+    handleNumberInput($("#prefHydration"), "preferment_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#prefMature"), "preferment_mature_hours", { trackUserTouched: true });
+    handleNumberInput($("#poolishShare"), "hybrid_poolish_share_percent", { trackUserTouched: true });
+    handleNumberInput($("#bigaShare"), "hybrid_biga_share_percent", { trackUserTouched: true });
+    handleNumberInput($("#poolishHydration"), "poolish_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#bigaHydration"), "biga_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#starterHydration"), "starter_hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#starterInoculation"), "starter_inoculation_percent", { trackUserTouched: true });
+    handleNumberInput($("#starterPeak"), "starter_peak_window_hours", { trackUserTouched: true });
 
-  on("#fermTotal", "change", (e) => {
-    const total = Number(e.target.value || 0);
-    if (!Number.isFinite(total)) return;
-
-    if (total === 0) {
-      applyInputChanges(
-        {
-          bulk_ferment_hours: 0,
-          cold_ferment_hours: 0,
-          ball_or_pan_ferment_hours: 0
-        },
-        { trackUserTouched: true }
-      );
-      return;
-    }
-
-    const currentTotal = totalFermentHours || 1;
-    const bulkRatio = Number(resolved.bulk_ferment_hours || 0) / currentTotal;
-    const coldRatio = Number(resolved.cold_ferment_hours || 0) / currentTotal;
-    const ballRatio = Number(resolved.ball_or_pan_ferment_hours || 0) / currentTotal;
-
-    applyInputChanges(
-      {
-        bulk_ferment_hours: round(total * bulkRatio, 1),
-        cold_ferment_hours: round(total * coldRatio, 1),
-        ball_or_pan_ferment_hours: round(total * ballRatio, 1)
-      },
-      { trackUserTouched: true }
+    on("#fermLoc", "change", (e) =>
+      applyInputChanges({ fermentation_location: e.target.value }, { trackUserTouched: true })
     );
-  });
+    handleNumberInput($("#bulkHours"), "bulk_ferment_hours", { trackUserTouched: true });
+    handleNumberInput($("#coldHours"), "cold_ferment_hours", { trackUserTouched: true });
+    handleNumberInput($("#ballHours"), "ball_or_pan_ferment_hours", { trackUserTouched: true });
 
-  on("#fermMode", "change", (e) => {
-    const total = Number(($("#fermTotal") || {}).value || 0);
-    if (!Number.isFinite(total)) return;
+    on("#fermTotal", "change", (e) => {
+      const total = Number(e.target.value || 0);
+      if (!Number.isFinite(total)) return;
 
-    if (e.target.value === "single") {
+      if (total === 0) {
+        applyInputChanges(
+          {
+            bulk_ferment_hours: 0,
+            cold_ferment_hours: 0,
+            ball_or_pan_ferment_hours: 0
+          },
+          { trackUserTouched: true }
+        );
+        return;
+      }
+
+      const currentTotal = totalFermentHours || 1;
+      const bulkRatio = Number(resolved.bulk_ferment_hours || 0) / currentTotal;
+      const coldRatio = Number(resolved.cold_ferment_hours || 0) / currentTotal;
+      const ballRatio = Number(resolved.ball_or_pan_ferment_hours || 0) / currentTotal;
+
       applyInputChanges(
         {
-          bulk_ferment_hours: total,
-          cold_ferment_hours: 0,
-          ball_or_pan_ferment_hours: 0
+          bulk_ferment_hours: round(total * bulkRatio, 1),
+          cold_ferment_hours: round(total * coldRatio, 1),
+          ball_or_pan_ferment_hours: round(total * ballRatio, 1)
         },
         { trackUserTouched: true }
       );
-      return;
-    }
+    });
 
-    const defaults = method?.defaults || {};
-    const defaultTotal =
-      Number(defaults.bulk_ferment_hours || 0) +
-      Number(defaults.cold_ferment_hours || 0) +
-      Number(defaults.ball_or_pan_ferment_hours || 0);
+    on("#fermMode", "change", (e) => {
+      const total = Number(($("#fermTotal") || {}).value || 0);
+      if (!Number.isFinite(total)) return;
 
-    if (defaultTotal > 0) {
-      applyInputChanges(
-        {
-          bulk_ferment_hours: round(total * (Number(defaults.bulk_ferment_hours || 0) / defaultTotal), 1),
-          cold_ferment_hours: round(total * (Number(defaults.cold_ferment_hours || 0) / defaultTotal), 1),
-          ball_or_pan_ferment_hours: round(total * (Number(defaults.ball_or_pan_ferment_hours || 0) / defaultTotal), 1)
-        },
-        { trackUserTouched: true }
-      );
-    }
-  });
+      if (e.target.value === "single") {
+        applyInputChanges(
+          {
+            bulk_ferment_hours: total,
+            cold_ferment_hours: 0,
+            ball_or_pan_ferment_hours: 0
+          },
+          { trackUserTouched: true }
+        );
+        return;
+      }
 
-  handleNumberInput($("#hydration"), "hydration_percent", { trackUserTouched: true });
-  handleNumberInput($("#salt"), "salt_percent", { trackUserTouched: true });
-  handleNumberInput($("#oil"), "oil_percent", { trackUserTouched: true });
-  handleNumberInput($("#honey"), "honey_percent", { trackUserTouched: true });
-  handleNumberInput($("#sugar"), "sugar_percent", { trackUserTouched: true });
-  handleNumberInput($("#malt"), "diastatic_malt_percent", { trackUserTouched: true });
-  handleNumberInput($("#yeastPct"), "yeast_percent", { trackUserTouched: true });
+      const defaults = method?.defaults || {};
+      const defaultTotal =
+        Number(defaults.bulk_ferment_hours || 0) +
+        Number(defaults.cold_ferment_hours || 0) +
+        Number(defaults.ball_or_pan_ferment_hours || 0);
 
-  on("#yeastType", "change", (e) =>
-    applyInputChanges({ yeast_type: e.target.value }, { trackUserTouched: true })
-  );
+      if (defaultTotal > 0) {
+        applyInputChanges(
+          {
+            bulk_ferment_hours: round(total * (Number(defaults.bulk_ferment_hours || 0) / defaultTotal), 1),
+            cold_ferment_hours: round(total * (Number(defaults.cold_ferment_hours || 0) / defaultTotal), 1),
+            ball_or_pan_ferment_hours: round(total * (Number(defaults.ball_or_pan_ferment_hours || 0) / defaultTotal), 1)
+          },
+          { trackUserTouched: true }
+        );
+      }
+    });
+
+    handleNumberInput($("#hydration"), "hydration_percent", { trackUserTouched: true });
+    handleNumberInput($("#salt"), "salt_percent", { trackUserTouched: true });
+    handleNumberInput($("#oil"), "oil_percent", { trackUserTouched: true });
+    handleNumberInput($("#honey"), "honey_percent", { trackUserTouched: true });
+    handleNumberInput($("#sugar"), "sugar_percent", { trackUserTouched: true });
+    handleNumberInput($("#malt"), "diastatic_malt_percent", { trackUserTouched: true });
+    handleNumberInput($("#yeastPct"), "yeast_percent", { trackUserTouched: true });
+
+    on("#yeastType", "change", (e) =>
+      applyInputChanges({ yeast_type: e.target.value }, { trackUserTouched: true })
+    );
+  }
 }
 
 
   function renderOrders() {
     const root = $("#tab-orders");
     if (!root) return;
+    normalizeOrdersData();
     root.innerHTML = `
       <div class="card">
         <h2>Orders</h2>
@@ -1850,11 +2067,45 @@ function renderSession() {
             <input type="text" data-order-name="${order.id}" value="${escapeHtml(order.name)}">
           </div>
           <div>
-            <label>Pizza count</label>
+            <label>Total pizza count</label>
             <input type="number" data-order-qty="${order.id}" value="${escapeHtml(order.quantity)}">
           </div>
         </div>
-        <button data-order-remove="${order.id}">Remove</button>
+        <div style="margin-top:12px;">
+          <label>Pizza types</label>
+          <div>
+            ${order.pizzas.length ? order.pizzas.map((pizza) => {
+              const preset = getPresetById(pizza.preset_id);
+              return `
+                <div style="display:grid; grid-template-columns: 84px 1fr 120px 40px; gap:12px; align-items:start; padding:10px; border:1px solid #eee; border-radius:8px; margin-top:12px;">
+                  <div style="width:72px; height:72px; border:1px solid #ddd; background:#f7f7f7; display:flex; align-items:center; justify-content:center; font-size:11px; color:#888;">
+                    No image
+                  </div>
+                  <div>
+                    <label class="small">Preset</label>
+                    <select data-pizza-preset="${pizza.id}" data-order-id="${order.id}">
+                      ${getOrderPresetOptionsHtml(pizza.preset_id)}
+                    </select>
+                    <div style="margin-top:8px; padding:6px; border:1px solid #eee; border-radius:6px; background:#fafafa; min-height:60px;">
+                      ${renderPresetToppingsHtml(preset)}
+                    </div>
+                  </div>
+                  <div>
+                    <label class="small">Count</label>
+                    <input type="number" min="1" step="1" data-pizza-count="${pizza.id}" data-order-id="${order.id}" value="${escapeHtml(pizza.count)}">
+                  </div>
+                  <div style="display:flex; justify-content:center; padding-top:20px;">
+                    <button data-pizza-remove="${pizza.id}" data-order-id="${order.id}" style="background:#d9534f; color:#fff; border:none; width:32px; height:32px; border-radius:6px;">−</button>
+                  </div>
+                </div>
+              `;
+            }).join("") : `<div class="small" style="margin-top:8px;">No pizza types yet.</div>`}
+          </div>
+          <button data-order-add-pizza="${order.id}" style="margin-top:12px;">Add Pizza Type</button>
+        </div>
+        <div style="margin-top:12px; text-align:right;">
+          <button data-order-remove="${order.id}">Remove</button>
+        </div>
       </div>
     `).join("");
 
@@ -1872,9 +2123,69 @@ function renderSession() {
       input.addEventListener("change", (e) => {
         const order = APP_STATE.orders.find((o) => o.id === e.target.dataset.orderQty);
         if (order) {
-          order.quantity = Number(e.target.value || 0);
+          reconcileOrderQuantity(order, e.target.value);
           updateStateAndRender();
         }
+      });
+    });
+
+    $$("[data-pizza-preset]").forEach((select) => {
+      select.addEventListener("change", (e) => {
+        const order = APP_STATE.orders.find((o) => o.id === e.target.dataset.orderId);
+        if (!order) return;
+        const pizza = order.pizzas.find((p) => p.id === e.target.dataset.pizzaPreset);
+        if (!pizza) return;
+        pizza.preset_id = e.target.value;
+        order.lastEditedPizzaId = pizza.id;
+        mergeDuplicatePizzaPresets(order);
+        order.quantity = sumPizzaCounts(order.pizzas);
+        updateStateAndRender();
+      });
+    });
+
+    $$("[data-pizza-count]").forEach((input) => {
+      input.addEventListener("change", (e) => {
+        const order = APP_STATE.orders.find((o) => o.id === e.target.dataset.orderId);
+        if (!order) return;
+        const pizza = order.pizzas.find((p) => p.id === e.target.dataset.pizzaCount);
+        if (!pizza) return;
+        pizza.count = normalizePizzaCount(e.target.value);
+        order.lastEditedPizzaId = pizza.id;
+        order.quantity = sumPizzaCounts(order.pizzas);
+        updateStateAndRender();
+      });
+    });
+
+    $$("[data-pizza-remove]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const order = APP_STATE.orders.find((o) => o.id === e.target.dataset.orderId);
+        if (!order) return;
+        const id = e.target.dataset.pizzaRemove;
+        order.pizzas = order.pizzas.filter((pizza) => pizza.id !== id);
+        order.quantity = sumPizzaCounts(order.pizzas);
+        updateStateAndRender();
+      });
+    });
+
+    $$("[data-order-add-pizza]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const order = APP_STATE.orders.find((o) => o.id === e.target.dataset.orderAddPizza);
+        if (!order) return;
+        if (order.quantity <= 0) {
+          order.quantity = 1;
+        }
+        const newPizza = {
+          id: cryptoSafeId("pizza"),
+          preset_id: getNextOrderPresetId(order),
+          count: 1
+        };
+        order.pizzas = order.pizzas || [];
+        order.pizzas.push(newPizza);
+        order.lastEditedPizzaId = newPizza.id;
+        mergeDuplicatePizzaPresets(order);
+        adjustCountsForNewPizza(order, newPizza.id);
+        order.quantity = sumPizzaCounts(order.pizzas);
+        updateStateAndRender();
       });
     });
 
@@ -1887,7 +2198,19 @@ function renderSession() {
     });
 
     on("#add-order", "click", () => {
-      APP_STATE.orders.push({ id: cryptoSafeId("order"), name: "Guest", quantity: 1, notes: "" });
+      APP_STATE.orders.push({
+        id: cryptoSafeId("order"),
+        name: "Guest",
+        quantity: 1,
+        notes: "",
+        pizzas: [
+          {
+            id: cryptoSafeId("pizza"),
+            preset_id: getDefaultOrderPresetId(),
+            count: 1
+          }
+        ]
+      });
       updateStateAndRender();
     });
   }
@@ -1954,6 +2277,7 @@ function renderSession() {
     const root = $("#tab-shopping");
     if (!root) return;
     const { derived } = APP_STATE.session;
+    const toppingsTotals = derived.toppings_totals || {};
     root.innerHTML = `
       <div class="card">
         <h2>Shopping List</h2>
@@ -1968,6 +2292,16 @@ function renderSession() {
           <li>Malt: ${derived.total_malt_g} g</li>
           <li>Yeast: ${derived.total_yeast_g} g</li>
         </ul>
+        <div style="margin-top:12px;">
+          <h3>Toppings</h3>
+          ${Object.keys(toppingsTotals).length ? `
+            <ul>
+              ${Object.values(toppingsTotals)
+                .map((topping) => `<li>${escapeHtml(topping.label)}: ${topping.total_g} g</li>`)
+                .join("")}
+            </ul>
+          ` : `<div class="small">No toppings defined.</div>`}
+        </div>
       </div>
     `;
   }
@@ -2088,6 +2422,7 @@ function renderSession() {
     const defaultInputs = normalizeInputs(APP_STATE.session.inputs, defaultMethod?.defaults || {}, defaultMethod);
     APP_STATE.session.inputs = defaultInputs;
 
+    normalizeOrdersData();
     resolveSession();
     APP_STATE.session.derived = computeDerived(APP_STATE.session.resolved, getMethodById(APP_STATE.session.resolved.method_id));
 
