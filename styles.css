@@ -48,19 +48,6 @@ body{
   border-color:rgba(249,115,22,.45);
 }
 
-.debug-toggle{
-  margin-left:auto;
-  display:flex;
-  align-items:center;
-  gap:8px;
-  font-size:.9rem;
-  color:var(--muted);
-  white-space:nowrap;
-}
-.debug-toggle input{
-  width:auto;
-}
-
 .content{padding:14px; max-width:980px; margin:0 auto;}
 
 .tab-panel{display:none;}
@@ -234,6 +221,3 @@ input:focus,select:focus{
 .kpi .v{font-size:1.1rem; font-weight:800; margin-top:4px}
 .small{font-size:.9rem; color:var(--muted)}
 strong{color:var(--text)}
-
-.debug-panel.hidden{display:none;}
-.debug-panel .card{margin-top:0}

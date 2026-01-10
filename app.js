@@ -68,8 +68,7 @@
       }
     },
     ui: {
-      activeTab: "session",
-      debugMode: false
+      activeTab: "session"
     }
   };
 
@@ -212,7 +211,9 @@
         APP_STATE.orders = Array.isArray(parsed.orders) ? parsed.orders : APP_STATE.orders;
         APP_STATE.session.inputs = parsed.session?.inputs || APP_STATE.session.inputs;
         APP_STATE.ui.activeTab = parsed.ui?.activeTab || APP_STATE.ui.activeTab;
-        APP_STATE.ui.debugMode = Boolean(parsed.ui?.debugMode);
+        if (APP_STATE.ui.activeTab === "debug") {
+          APP_STATE.ui.activeTab = "session";
+        }
       }
     } catch {
       // ignore
@@ -1352,7 +1353,7 @@
               `).join("")}
             </select>
             <div class="small" style="margin-top:6px;">
-              ${oven?.constraints?.max_pizza_diameter_in ? `Max: ${escapeHtml(oven.constraints.max_pizza_diameter_in)}"` : ""}
+              ${oven?.constraints?.max_pizza_diameter_in ? "Max: " + escapeHtml(oven.constraints.max_pizza_diameter_in) + "\"" : ""}
               ${oven?.constraints?.supports_round_only ? " • Round only" : ""}
             </div>
             ${!existingDough ? `
@@ -1418,7 +1419,7 @@
             <div class="small">${escapeHtml(preset?.label || "")}</div>
           </div>
         </div>
-        ` : ""}
+        `}
         <div style="margin-top:12px;">
           <label>Pizza Style</label>
           <select id="styleId">
@@ -1893,24 +1894,12 @@
     `;
   }
 
-  function renderDebug() {
-    const root = $("#tab-debug");
-    if (!root) return;
-    root.innerHTML = `
-      <div class="card">
-        <h2>Debug</h2>
-        <pre>${escapeHtml(JSON.stringify(APP_STATE.session, null, 2))}</pre>
-      </div>
-    `;
-  }
-
   function render() {
     setActive("#tab-session", APP_STATE.ui.activeTab === "session");
     setActive("#tab-orders", APP_STATE.ui.activeTab === "orders");
     setActive("#tab-making", APP_STATE.ui.activeTab === "making");
     setActive("#tab-shopping", APP_STATE.ui.activeTab === "shopping");
     setActive("#tab-presets", APP_STATE.ui.activeTab === "presets");
-    setActive("#tab-debug", APP_STATE.ui.activeTab === "debug");
     $$("#tabs .tab-btn").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === APP_STATE.ui.activeTab);
     });
@@ -1920,7 +1909,6 @@
     renderMaking();
     renderShopping();
     renderPresets();
-    renderDebug();
   }
 
   function initTabs() {
@@ -1932,18 +1920,6 @@
       });
     });
 
-    const debugToggle = $("#debugToggle");
-    if (debugToggle) {
-      debugToggle.checked = APP_STATE.ui.debugMode;
-      debugToggle.addEventListener("change", (e) => {
-        APP_STATE.ui.debugMode = e.target.checked;
-        if (!APP_STATE.ui.debugMode && APP_STATE.ui.activeTab === "debug") {
-          APP_STATE.ui.activeTab = "session";
-        }
-        saveState();
-        render();
-      });
-    }
   }
 
   function setupDevTest() {
